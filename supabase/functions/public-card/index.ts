@@ -40,7 +40,7 @@ serve(async (req) => {
   return json(req, {
     data: {
       ...publicData,
-      views: data.views.filter((v) => v.status === "ready"),
+      views: data.views.filter((v) => v.status === "ready").map((v) => ({ view: v.view, generation_id: null, status: v.status })),
       disclaimer: CARD_DISCLAIMER,
     },
     images: Object.fromEntries(data.views.filter((v) => v.generation_id).map((v) => [v.view, { url: byId.get(v.generation_id!) ?? null, download: null }])),
