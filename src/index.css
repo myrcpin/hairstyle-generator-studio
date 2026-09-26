@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #f5f2ec;
+  --color-paper-2: #ece7de;
+  --color-card: #fffdf9;
+  --color-ink: #171614;
+  --color-ink-2: #3a3733;
+  --color-muted: #625d55;
+  --color-line: #ddd6ca;
+  --color-accent: #7a4e2d;
+  --color-accent-2: #5e3b21;
+  --color-ok: #2f5d45;
+  --color-warn: #8a5a00;
+  --color-bad: #9b2c22;
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-paper text-ink font-sans antialiased; }
+  h1, h2, h3 { @apply font-display font-normal tracking-tight; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 2px; }
+  ::selection { background: #e7d6c6; }
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 min-h-12 px-6 text-[15px] font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed select-none;
+}
+@utility btn-primary {
+  @apply btn bg-ink text-paper hover:bg-ink-2;
+}
+@utility btn-secondary {
+  @apply btn border border-ink text-ink hover:bg-ink hover:text-paper;
+}
+@utility btn-ghost {
+  @apply btn px-3 text-ink underline-offset-4 hover:underline;
+}
+@utility eyebrow {
+  @apply text-[12px] uppercase tracking-[0.14em] text-muted font-medium;
+}
+@utility input {
+  @apply w-full min-h-12 border border-line bg-card px-4 text-[16px] placeholder:text-muted/70 focus:border-ink focus:outline-none;
+}
+@utility chip {
+  @apply inline-flex items-center min-h-10 px-4 border border-line bg-card text-[14px] cursor-pointer select-none transition-colors hover:border-ink;
+  &[aria-pressed="true"], &[aria-checked="true"] { @apply bg-ink text-paper border-ink; }
+}
+@utility container-x {
+  @apply mx-auto w-full max-w-6xl px-4 sm:px-6;
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .print-card { box-shadow: none !important; border: 0 !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

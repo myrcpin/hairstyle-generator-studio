@@ -1,0 +1,54 @@
+# Supabase project configuration (local dev + deploy defaults)
+project_id = "hairstyle-card"
+
+[api]
+port = 54321
+schemas = ["public"]
+
+[db]
+port = 54322
+major_version = 17
+
+[auth]
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173/**"]
+# Visitors can upload and see their plan before giving an email; generation requires a verified email.
+enable_anonymous_sign_ins = true
+enable_signup = true
+jwt_expiry = 3600
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false
+enable_confirmations = true
+# 6-digit codes keep the user in the same tab (no link-hopping on mobile)
+otp_length = 6
+otp_expiry = 3600
+
+[auth.rate_limit]
+email_sent = 30
+anonymous_users = 30
+
+# Recommended in production: Cloudflare Turnstile / hCaptcha for anonymous sign-ins.
+# [auth.captcha]
+# enabled = true
+# provider = "turnstile"
+# secret = "env(TURNSTILE_SECRET)"
+
+[storage]
+file_size_limit = "20MiB"
+
+[edge_runtime]
+policy = "per_worker"
+
+[functions.paypal-webhook]
+verify_jwt = false
+
+[functions.public-card]
+verify_jwt = false
+
+[functions.maintenance]
+verify_jwt = false
+
+[functions.track]
+verify_jwt = false
