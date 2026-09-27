@@ -58,6 +58,13 @@ export const ANALYTICS_EVENTS = [
   "qr_viewed",
   "project_deleted",
   "subscription_cancelled",
+  "pack_purchased",
+  "survey_completed",
+  "referral_attached",
+  "referral_qualified",
+  "referral_rewarded",
+  "business_created",
+  "business_session",
 ] as const;
 export type AnalyticsEvent = (typeof ANALYTICS_EVENTS)[number];
 

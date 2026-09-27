@@ -62,6 +62,7 @@ export default function Card() {
   if (!card) return <div className="container-x py-16"><Spinner label="Loading your card" /></div>;
 
   const full = card.tier === "full";
+  const isSalon = !!card.orgId;
   return (
     <div className="container-x py-8">
       <div className="no-print mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -75,10 +76,10 @@ export default function Card() {
       <HairstyleCard ref={ref} card={card} qrUrl={card.qr} publicUrl={card.publicUrl} />
 
       <div className="no-print mx-auto mt-8 max-w-4xl space-y-6">
-        {!full && (allowance?.paid ? (
+        {!full && (allowance?.paid || isSalon ? (
           <div className="border border-ink bg-card p-6">
             <h2 className="text-[28px]">Build your full Hairstyle Card</h2>
-            <p className="mt-2 text-ink-2">Adds 3/4, side and back views, downloads, a QR code and email delivery.</p>
+            <p className="mt-2 text-ink-2">Adds 3/4, side and back views, downloads, a QR code and email delivery.{isSalon ? " Uses one of your salon's full cards." : ""}</p>
             <button className="btn-primary mt-4" onClick={upgrade} disabled={!!busy}>{busy === "upgrade" ? <Spinner /> : "Build full card"}</button>
           </div>
         ) : <Paywall reason="Unlock the full Hairstyle Card" />)}
@@ -91,10 +92,13 @@ export default function Card() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button className="btn-primary" onClick={downloadCard} disabled={!!busy || card.status === "building"}>{busy === "png" ? <Spinner /> : "Download card"}</button>
                   <button className="btn-secondary" onClick={() => { trackClient("download", { kind: "pdf" }); window.print(); }}>Save as PDF</button>
-                  <button className="btn-secondary" disabled={!!busy} onClick={() => action("email", async () => { await callFn("studio", { action: "email_card", cardId: id }); setNotice("Sent! Check your inbox for your Hairstyle Card."); })}>
-                    {busy === "email" ? <Spinner /> : "Email it to me"}
-                  </button>
+                  {!isSalon && (
+                    <button className="btn-secondary" disabled={!!busy} onClick={() => action("email", async () => { await callFn("studio", { action: "email_card", cardId: id }); setNotice("Sent! Check your inbox for your Hairstyle Card."); })}>
+                      {busy === "email" ? <Spinner /> : "Email it to me"}
+                    </button>
+                  )}
                 </div>
+                {isSalon && <ClientEmail cardId={id} busy={busy} onSend={(to) => action("email", async () => { await callFn("studio", { action: "email_card", cardId: id, to }); setNotice(`Sent to ${to}.`); })} />}
                 <ul className="mt-4 space-y-1 text-[14px]">
                   {Object.entries(card.images).filter(([, v]) => v?.download).map(([view, v]) => (
                     <li key={view}><a className="underline" href={v!.download!} onClick={() => trackClient("download", { kind: view })}>Download {VIEW_LABELS[view as keyof typeof VIEW_LABELS].toLowerCase()} image (high resolution)</a></li>
@@ -121,5 +125,23 @@ export default function Card() {
         )}
       </div>
     </div>
+  );
+}
+
+function ClientEmail({ cardId, busy, onSend }: { cardId: string; busy: string | null; onSend: (to: string) => void }) {
+  const [to, setTo] = useState("");
+  const [agreed, setAgreed] = useState(false);
+  return (
+    <form className="mt-4 space-y-2" onSubmit={(e) => { e.preventDefault(); if (to && agreed) onSend(to.trim()); }} aria-label="Email this card to your client" data-card={cardId}>
+      <label htmlFor="client-email" className="block text-[14px] font-medium">Email to your client</label>
+      <div className="flex gap-2">
+        <input id="client-email" type="email" className="input min-h-10 flex-1" value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" />
+        <button className="btn-secondary min-h-10 px-4" disabled={!!busy || !to || !agreed}>{busy === "email" ? <Spinner /> : "Send"}</button>
+      </div>
+      <label className="flex items-start gap-2 text-[13px] text-ink-2">
+        <input type="checkbox" className="mt-0.5 h-4 w-4 accent-ink" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} />
+        The client has asked for their card by email.
+      </label>
+    </form>
   );
 }

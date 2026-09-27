@@ -7,6 +7,7 @@ import { getSettings } from "../_shared/settings.ts";
 import { track } from "../_shared/analytics.ts";
 import { isWellFormedToken } from "../_shared/core/tokens.ts";
 import { CARD_DISCLAIMER, type CardData } from "../_shared/core/card.ts";
+import { brandLogoUrl } from "../_shared/brand.ts";
 
 serve(async (req) => {
   const body = req.method === "POST" ? await readJson(req) : Object.fromEntries(new URL(req.url).searchParams);
@@ -42,9 +43,11 @@ serve(async (req) => {
       ...publicData,
       views: data.views.filter((v) => v.status === "ready").map((v) => ({ view: v.view, generation_id: null, status: v.status })),
       disclaimer: CARD_DISCLAIMER,
+      brand: data.brand ? { name: data.brand.name, booking_url: data.brand.booking_url } : null,
     },
     images: Object.fromEntries(data.views.filter((v) => v.generation_id).map((v) => [v.view, { url: byId.get(v.generation_id!) ?? null, download: null }])),
     original,
+    brandLogo: await brandLogoUrl(data.brand ?? null, 900),
     expiresAt: card.expires_at,
   });
 }, { checkOrigin: false });

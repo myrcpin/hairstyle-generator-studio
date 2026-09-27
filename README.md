@@ -20,7 +20,9 @@ Supabase
   └─ Edge Functions (Deno)                                 (supabase/functions)
        studio          create_project · analyse · generate · generate_another · alter · select
                        card · email_card · share/revoke · save/delete project · delete account · claim
-       billing         PayPal create_subscription · confirm · cancel · status
+                       get/submit_survey · get/attach_referral
+       billing         PayPal subscriptions (Plus + salon) · Starter Pack buy/capture · confirm · cancel
+       business        salons: create · dashboard · branding/logo · staff invites · members
        paypal-webhook  signature-verified, idempotent, re-fetches authoritative subscription state
        public-card     /style/<token> data (no email, no ids)
        admin           stats · settings · plans
@@ -43,7 +45,7 @@ Key design decisions
 | Abuse | Verified, non-disposable email before any image generation; hashed-IP + per-user rate limits; max free accounts per hashed IP per 30 days; hashed random device id (no fingerprinting). |
 | Privacy | Private buckets + short-lived signed URLs; client strips EXIF/GPS and downscales before upload; source photos auto-deleted (7 days default), generations 30 days unless saved; unverified anonymous users purged after 7 days; project and account deletion; no facial recognition; `store: false` on text-model calls. |
 | Provider swap | `_shared/ai/types.ts` defines `TextProvider` / `ImageProvider`; OpenAI is one implementation selected in `_shared/ai/index.ts`. |
-| Future Style Pack | `plans.kind = 'one_time'` + `credit_grants` + `PAYMENT.CAPTURE.COMPLETED` handler already grant credits; only a checkout button (PayPal Orders) is missing. |
+| Starter Pack, survey, referrals, salons | One-off pack via PayPal Orders (captured and verified server-side); 5-question post-purchase survey; 3-friend referral → free month (max 3); salon plans with branded cards. See [docs/GROWTH.md](docs/GROWTH.md) and [docs/COMPETITORS.md](docs/COMPETITORS.md). |
 
 ## Local development
 
@@ -62,7 +64,7 @@ Without Supabase variables the site still renders (landing, legal, pricing) and 
    ```bash
    npx supabase link --project-ref <ref>
    npx supabase db push                       # applies supabase/migrations
-   npx supabase functions deploy studio billing paypal-webhook public-card admin track maintenance
+   npx supabase functions deploy studio billing business paypal-webhook public-card admin track maintenance
    ```
    `paypal-webhook`, `public-card`, `maintenance` and `track` run with `verify_jwt = false`
    (see `supabase/config.toml`); they do their own verification.
@@ -79,12 +81,13 @@ Without Supabase variables the site still renders (landing, legal, pricing) and 
      IP_HASH_SALT=$(openssl rand -hex 32) CRON_SECRET=$(openssl rand -hex 32)
    ```
 4. **PayPal** (sandbox first):
-   - Create a Product and one monthly Plan **per currency** (GBP and USD). Put the plan ids in
+   - The **Starter Pack** needs no PayPal plan (it's a one-off Orders checkout); its price lives in the `plans` table.
+   - Create a Product and one monthly Plan **per currency** (GBP and USD) for Plus, and for each salon plan (`business_studio`, `business_pro`). Put the plan ids in
      Admin → Configuration → Plan (or `update plans set prices = ...`). The configured amount is sent to PayPal as a
      plan override, so admin price changes apply to new subscribers.
    - Create a webhook to `https://<ref>.supabase.co/functions/v1/paypal-webhook` subscribed to:
      `BILLING.SUBSCRIPTION.ACTIVATED, .RE-ACTIVATED, .UPDATED, .CANCELLED, .SUSPENDED, .EXPIRED, .PAYMENT.FAILED,
-     PAYMENT.SALE.COMPLETED, PAYMENT.SALE.REFUNDED, PAYMENT.SALE.REVERSED` (and `PAYMENT.CAPTURE.COMPLETED` for future packs).
+     PAYMENT.SALE.COMPLETED, PAYMENT.SALE.REFUNDED, PAYMENT.SALE.REVERSED, PAYMENT.CAPTURE.COMPLETED` (the last one is for Starter Packs).
      Copy its id into `PAYPAL_WEBHOOK_ID`.
 5. **Retention job** — run `supabase/cron.sql` in the SQL editor (fill in project ref and `CRON_SECRET`).
 6. **Admin** — `update public.users set is_admin = true where email = 'you@yourdomain.com';`
@@ -110,11 +113,11 @@ Without Supabase variables the site still renders (landing, legal, pricing) and 
 
 | Command | What it proves |
 |---|---|
-| `npm test` | 22 unit tests: image sniffing, validation, prompt construction (identity rules, reference fencing, prompt-injection quoting), model-output validation, measurement stripping, PayPal state mapping, tokens, pricing |
-| `npm run test:db` | Applies migrations to a throwaway Postgres and asserts: free 3, paid 7 + 2, idempotency, refunds, renewal reset, cancelled-until-period-end, suspended loses access, grants, rate limits, RLS isolation, no client privilege escalation |
+| `npm test` | 29 unit tests: image sniffing, validation, prompt construction (identity rules, reference fencing, prompt-injection quoting), model-output validation, measurement stripping, PayPal state mapping, tokens, pricing, survey validation, referral codes/progress, pack-capture verification (owner/amount/currency/status) |
+| `npm run test:db` | Applies migrations to a throwaway Postgres and asserts: free 3, paid 7 + 2, idempotency, refunds, renewal reset, cancelled-until-period-end, suspended loses access, grants, rate limits, RLS isolation, no client privilege escalation; Starter Pack access, referral 3/3 → month, idempotent qualification, consecutive reward months, max 3 rewards, salon credit pool, salon RLS |
 | `npm run test:deno` | OpenAI provider against a mock server: multipart shape, structured outputs, 429/moderation/timeout mapping |
 | `npm run check:functions` | `deno check` + `deno lint` on every edge function |
-| `npm run test:e2e` | Playwright (mobile, en-GB) runs the real UI through the full journey against a stateful mock of the backend contracts: landing → invalid uploads → upload → plan → email OTP (wrong then right code) → 3 free looks → paywall → preview card → subscribe → full card with angles + QR → PNG download → email → public QR page → alteration → generate another → revoke link → cancel; plus rejected-photo and dead-link cases |
+| `npm run test:e2e` | Playwright (mobile, en-GB) runs the real UI through the full journey against a stateful mock of the backend contracts: landing → invalid uploads → upload → plan → email OTP (wrong then right code) → 3 free looks → paywall → preview card → subscribe → full card with angles + QR → PNG download → email → public QR page → alteration → generate another → revoke link → cancel; plus rejected-photo and dead-link cases; referral (3 friends buy packs → referrer rewarded) with the 5-question survey; salon setup → subscribe → client consultation → branded card emailed to client |
 
 **Not yet verified against live services:** real OpenAI output quality/identity preservation, real PayPal
 sandbox approval + webhooks, real Supabase Auth email delivery. These need credentials; run the

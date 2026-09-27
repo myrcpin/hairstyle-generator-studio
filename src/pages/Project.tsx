@@ -23,7 +23,7 @@ function useProjectData(id: string) {
 
   const reload = useCallback(async () => {
     const [{ data: p, error }, { data: g }] = await Promise.all([
-      supabase.from("projects").select("id,status,brief,recommendations,rejection_reason,saved,created_at,expires_at").eq("id", id).maybeSingle(),
+      supabase.from("projects").select("id,status,brief,recommendations,rejection_reason,saved,created_at,expires_at,org_id,client_label").eq("id", id).maybeSingle(),
       supabase.from("generations").select("id,project_id,parent_generation_id,generation_type,direction,view,recommendation,instruction,status,error_message,concept_only,created_at")
         .eq("project_id", id).in("generation_type", ["concept", "alteration"]).order("created_at"),
     ]);
@@ -79,13 +79,15 @@ export default function Project() {
   const concepts = useMemo(() => gens.filter((g) => g.generation_type === "concept"), [gens]);
   const recs = (project?.recommendations ?? []) as Recommendation[];
   const hasConcepts = concepts.length > 0;
-  const paid = !!allowance?.paid;
+  const isSalon = !!project?.org_id;
+  // Salon sessions are billed to the salon (server-enforced); personal projects use the person's plan.
+  const paid = isSalon || !!allowance?.paid;
 
   const handleError = useCallback((e: unknown) => {
-    if (e instanceof ApiError && (e.code === "paid_feature" || (e.code === "insufficient_credits" && !paid))) {
-      setPaywall(e.code === "paid_feature" ? "Get more styles with Plus" : "You've used your free styles");
+    if (!isSalon && e instanceof ApiError && (e.code === "paid_feature" || (e.code === "insufficient_credits" && !paid))) {
+      setPaywall(e.code === "paid_feature" ? "Get more styles" : "You've used your free styles");
     } else setError(errorMessage(e));
-  }, [paid]);
+  }, [paid, isSalon]);
 
   const startGeneration = useCallback(async (directions?: string[]) => {
     setError(null);
@@ -168,12 +170,12 @@ export default function Project() {
   const byDirection = (d: string) => concepts.filter((g) => g.direction === d).at(-1) ?? null;
   const extraConcepts = concepts.filter((g) => g.direction === "extra");
   const alterations = gens.filter((g) => g.generation_type === "alteration");
-  const freeDone = !paid && (allowance?.free.remaining ?? 0) <= 0;
+  const freeDone = !paid && !isSalon && (allowance?.free.remaining ?? 0) <= 0;
 
   return (
     <div className="container-x py-10">
       <div className="mb-8 max-w-3xl">
-        <p className="eyebrow">Your hairstyle plan</p>
+        <p className="eyebrow">{isSalon ? `Client consultation${project.client_label ? ` · ${project.client_label}` : ""}` : "Your hairstyle plan"}</p>
         <h1 className="mt-2 text-[40px] leading-[1.05] sm:text-[52px]">{hasConcepts ? "Compare your looks." : "Three directions, planned for you."}</h1>
         {project.brief?.requested_change && <p className="mt-3 text-[17px] text-ink-2">You asked for: {project.brief.requested_change}</p>}
         {project.brief?.feasibility_warnings?.length ? (
@@ -193,12 +195,12 @@ export default function Project() {
             ))}
           </ol>
           <div className="border border-ink bg-card p-6">
-            {!isVerified ? (
+            {!isVerified && !isSalon ? (
               <EmailGate title="Verify your email to see these on you." onVerified={() => undefined} />
             ) : (
               <div className="space-y-4">
                 <h2 className="text-[30px] leading-tight">Ready to see them on you?</h2>
-                <p className="text-ink-2">We'll create all three looks from your photo. This uses {paid ? "3 of your monthly styles" : "your 3 free styles"}.</p>
+                <p className="text-ink-2">We'll create all three looks from {isSalon ? "your client's" : "your"} photo. This uses {isSalon ? "3 of your salon's looks" : paid ? "3 of your styles" : "your 3 free styles"}.</p>
                 {busy ? <p role="status" className="flex items-center gap-3"><Spinner /> Starting…</p> : (
                   <button className="btn-primary" onClick={() => startGeneration()}>Create my 3 looks</button>
                 )}
@@ -220,13 +222,13 @@ export default function Project() {
               const g = byDirection(rec.direction);
               return (
                 <ConceptCard key={rec.direction} gen={g} rec={rec} url={g ? urls[g.id] : null} watermark={!paid} busy={busy}
-                  onChoose={() => g && choose(g)} onAlter={() => g && (paid ? setAlterFor(g) : setPaywall("Fine-tune a look with Plus"))}
+                  onChoose={() => g && choose(g)} onAlter={() => g && (paid ? setAlterFor(g) : setPaywall("Fine-tune a look"))}
                   onAnother={() => another(rec)} onRetry={() => startGeneration([rec.direction])} />
               );
             })}
             {extraConcepts.map((g) => (
               <ConceptCard key={g.id} gen={g} rec={g.recommendation!} url={urls[g.id]} watermark={!paid} busy={busy}
-                onChoose={() => choose(g)} onAlter={() => (paid ? setAlterFor(g) : setPaywall("Fine-tune a look with Plus"))} onAnother={() => another(g.recommendation!)} />
+                onChoose={() => choose(g)} onAlter={() => (paid ? setAlterFor(g) : setPaywall("Fine-tune a look"))} onAnother={() => another(g.recommendation!)} />
             ))}
             {alterations.map((g) => (
               <ConceptCard key={g.id} gen={g} rec={g.recommendation!} url={urls[g.id]} watermark={!paid} busy={busy}
@@ -234,10 +236,10 @@ export default function Project() {
             ))}
           </div>
           <p className="mt-2 text-[13px] text-muted">AI-generated visual concepts. Real results depend on your hair and your stylist.</p>
-          {allowance && (
+          {allowance && !isSalon && (
             <p className="mt-4 text-[14px] text-ink-2">
               {paid
-                ? `${allowance.remaining.generations} new styles and ${allowance.remaining.alterations} alterations left this period.`
+                ? `${allowance.remaining.generations} new styles and ${allowance.remaining.alterations} alterations left.`
                 : `${allowance.free.remaining} free style${allowance.free.remaining === 1 ? "" : "s"} left.`}
             </p>
           )}
@@ -245,10 +247,10 @@ export default function Project() {
         </>
       )}
 
-      <Modal open={!!paywall} onClose={() => setPaywall(null)} title="Upgrade to Plus">
+      <Modal open={!!paywall} onClose={() => setPaywall(null)} title="Unlock more styles">
         {paywall && <Paywall reason={paywall} compact />}
       </Modal>
-      <AlterModal gen={alterFor} onClose={() => setAlterFor(null)} remaining={allowance?.remaining.alterations ?? 0}
+      <AlterModal gen={alterFor} onClose={() => setAlterFor(null)} remaining={isSalon ? -1 : allowance?.remaining.alterations ?? 0}
         onDone={async () => { setAlterFor(null); await Promise.all([reload(), refresh()]); }} onError={handleError} />
     </div>
   );
@@ -276,7 +278,7 @@ function AlterModal({ gen, onClose, onDone, onError, remaining }: { gen: Generat
   return (
     <Modal open={!!gen} onClose={onClose} title="Change something">
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-ink-2">We'll adjust this look rather than start over. {remaining} alteration{remaining === 1 ? "" : "s"} left this period.</p>
+        <p className="text-ink-2">We'll adjust this look rather than start over.{remaining >= 0 ? ` ${remaining} alteration${remaining === 1 ? "" : "s"} left.` : ""}</p>
         <div className="flex flex-wrap gap-2">
           {ALTERATION_PRESETS.map((p) => (
             <button type="button" key={p} className="chip" aria-pressed={presets.includes(p)} onClick={() => setPresets((xs) => xs.includes(p) ? xs.filter((x) => x !== p) : [...xs, p])}>{p}</button>
@@ -286,7 +288,7 @@ function AlterModal({ gen, onClose, onDone, onError, remaining }: { gen: Generat
           <label htmlFor="alter-text" className="mb-1 block text-[14px] font-medium">Anything else? <span className="font-normal text-muted">(optional)</span></label>
           <input id="alter-text" className="input" maxLength={300} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. a little shorter at the back" />
         </div>
-        <button className="btn-primary w-full" disabled={busy || remaining <= 0 || (!presets.length && !text.trim())}>{busy ? <Spinner label="Starting" /> : "Apply changes"}</button>
+        <button className="btn-primary w-full" disabled={busy || remaining === 0 || (!presets.length && !text.trim())}>{busy ? <Spinner label="Starting" /> : "Apply changes"}</button>
       </form>
     </Modal>
   );

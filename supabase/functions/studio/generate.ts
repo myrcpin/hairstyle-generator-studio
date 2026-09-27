@@ -7,12 +7,11 @@ import { textProvider } from "../_shared/ai/index.ts";
 import { track } from "../_shared/analytics.ts";
 import { ALTERATION_PRESETS, DIRECTIONS, PROMPT_VERSION, type Direction } from "../_shared/core/constants.ts";
 import { buildAlterationPrompt, buildConceptPrompt, EXTRA_SYSTEM_PROMPT } from "../_shared/core/prompts.ts";
-import {
-  EXTRA_RECOMMENDATION_JSON_SCHEMA, sanitizeRecommendation, type Recommendation, type StyleBrief,
-} from "../_shared/core/brief.ts";
-import { idemKey, isInsufficient, ownedGeneration, ownedProject, requireVerifiedEmail } from "./common.ts";
+import { EXTRA_RECOMMENDATION_JSON_SCHEMA, sanitizeRecommendation, type Recommendation, type StyleBrief } from "../_shared/core/brief.ts";
+import { type Access, accessFor, idemKey, outOfCredits, ownedGeneration, ownedProject, type ProjectRow, requireVerifiedEmail, reserveFor } from "./common.ts";
 
 type Db = ReturnType<typeof admin>;
+type Settings = Awaited<ReturnType<typeof getSettings>>;
 
 /** Free-tier abuse control: limit distinct free accounts per hashed IP. */
 async function checkFreeAbuse(db: Db, userId: string, ip: string, maxAccounts: number | undefined) {
@@ -24,15 +23,19 @@ async function checkFreeAbuse(db: Db, userId: string, ip: string, maxAccounts: n
   if (others.size >= maxAccounts) throw new HttpError(429, "abuse_limit");
 }
 
-async function commonGenerationGuards(req: Request, user: AuthedUser) {
+async function guards(req: Request, user: AuthedUser, project: ProjectRow): Promise<{ s: Settings; access: Access }> {
   await requireVerifiedEmail(user);
   const s = await getSettings();
   const ip = await ipHash(req);
-  await rateLimit(`gen:user:${user.id}`, 3600, s.rate_limits.generate_per_user_hour);
-  await rateLimit(`gen:ip:${ip}`, 3600, s.rate_limits.generate_per_ip_hour);
-  const allowance = await getAllowance(user.id);
-  if (!allowance.paid && allowance.free.remaining > 0) await checkFreeAbuse(admin(), user.id, ip, s.rate_limits.free_accounts_per_ip_30d);
-  return { s, allowance };
+  await rateLimit(`gen:user:${user.id}`, 3600, project.org_id ? (s.rate_limits.generate_per_user_hour ?? 12) * 4 : s.rate_limits.generate_per_user_hour);
+  if (!project.org_id) await rateLimit(`gen:ip:${ip}`, 3600, s.rate_limits.generate_per_ip_hour);
+  const access = await accessFor(user, project);
+  if (!project.org_id && !access.paid) {
+    const a = await getAllowance(user.id);
+    if (a.free.remaining > 0) await checkFreeAbuse(admin(), user.id, ip, s.rate_limits.free_accounts_per_ip_30d);
+  }
+  if (project.org_id && !access.paid) throw new HttpError(402, "org_inactive");
+  return { s, access };
 }
 
 async function referenceCount(db: Db, projectId: string) {
@@ -42,45 +45,39 @@ async function referenceCount(db: Db, projectId: string) {
 }
 
 async function enqueueConcept(db: Db, opts: {
-  user: AuthedUser; projectId: string; brief: StyleBrief; rec: Recommendation; key: string; paid: boolean; refs: number;
-  s: Awaited<ReturnType<typeof getSettings>>;
+  user: AuthedUser; project: ProjectRow; brief: StyleBrief; rec: Recommendation; key: string; paid: boolean; refs: number; s: Settings;
 }): Promise<{ id: string } | "insufficient"> {
   const genId = crypto.randomUUID();
-  const { data: usageId, error } = await db.rpc("reserve_usage", {
-    p_user: opts.user.id, p_project: opts.projectId, p_type: "generation", p_key: `usage:${opts.key}`,
-  });
-  if (error) {
-    if (isInsufficient(error)) return "insufficient";
-    throw new HttpError(500, "server_error");
-  }
+  const r = await reserveFor(opts.user, opts.project, "generation", `usage:${opts.key}`);
+  if (r === "insufficient") return r;
   const { error: insErr } = await db.from("generations").insert({
-    id: genId, project_id: opts.projectId, user_id: opts.user.id, generation_type: "concept",
+    id: genId, project_id: opts.project.id, user_id: opts.user.id, generation_type: "concept",
     direction: opts.rec.direction, view: "front", recommendation: opts.rec,
     prompt_version: PROMPT_VERSION,
     prompt: buildConceptPrompt({ brief: opts.brief, rec: opts.rec, referenceCount: opts.refs }),
     model: opts.s.models.explore,
     quality: opts.paid ? opts.s.image_quality.paid : opts.s.image_quality.free,
     size: opts.s.image_quality.size,
-    usage_id: usageId, idempotency_key: opts.key, concept_only: opts.rec.feasibility === "concept_only",
-    expires_at: new Date(Date.now() + opts.s.retention.generation_days * 86_400_000).toISOString(),
+    usage_id: r.usageId, idempotency_key: opts.key, concept_only: opts.rec.feasibility === "concept_only",
+    expires_at: opts.project.expires_at,
   });
   if (insErr) {
-    // Duplicate idempotency key (double submit) -> return the existing generation, refund nothing (same usage key).
+    // Duplicate idempotency key (double submit) -> return the existing generation (same usage key, no double charge).
     const { data: existing } = await db.from("generations").select("id").eq("idempotency_key", opts.key).maybeSingle();
     if (existing) return existing;
-    await db.rpc("finalize_usage", { p_usage: usageId, p_success: false });
+    await db.rpc("finalize_usage", { p_usage: r.usageId, p_success: false });
     throw new HttpError(500, "server_error");
   }
   return { id: genId };
 }
 
-async function trackGenerationMilestones(db: Db, userId: string, projectId: string, allowanceBefore: number, created: number, freeTier: boolean) {
-  const { count } = await db.from("usage").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("generation_type", "generation");
+async function trackGenerationMilestones(db: Db, userId: string, projectId: string, freeRemainingBefore: number, created: number, freeTier: boolean) {
+  const { count } = await db.from("usage").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("generation_type", "generation").is("org_id", null);
   const total = count ?? 0;
   for (let n = Math.max(1, total - created + 1); n <= Math.min(total, 3); n++) {
     await track(`generation_${n}` as "generation_1", userId, projectId);
   }
-  if (freeTier && allowanceBefore - created <= 0) await track("free_allowance_completed", userId, projectId);
+  if (freeTier && freeRemainingBefore - created <= 0) await track("free_allowance_completed", userId, projectId);
 }
 
 /** Initial three concepts (or a subset of directions). */
@@ -88,7 +85,7 @@ export async function generate(req: Request, user: AuthedUser, body: Record<stri
   const key = idemKey(body.idempotencyKey);
   const project = await ownedProject(user, body.projectId);
   if (!project.recommendations || !project.brief) throw new HttpError(409, "invalid_input");
-  const { s, allowance } = await commonGenerationGuards(req, user);
+  const { s, access } = await guards(req, user, project);
   const db = admin();
 
   const wanted = (Array.isArray(body.directions) ? body.directions : DIRECTIONS)
@@ -106,20 +103,23 @@ export async function generate(req: Request, user: AuthedUser, body: Record<stri
 
   const refs = await referenceCount(db, project.id);
   const created: string[] = [];
-  let outOfCredits = false;
+  let outOf = false;
   for (const rec of todo) {
-    const r = await enqueueConcept(db, { user, projectId: project.id, brief: project.brief, rec, key: `${key}:${rec.direction}`, paid: allowance.paid, refs, s });
-    if (r === "insufficient") { outOfCredits = true; break; }
+    const r = await enqueueConcept(db, { user, project, brief: project.brief as StyleBrief, rec, key: `${key}:${rec.direction}`, paid: access.paid, refs, s });
+    if (r === "insufficient") { outOf = true; break; }
     created.push(r.id);
   }
-  if (!created.length && !reused.length) throw new HttpError(402, allowance.paid ? "insufficient_credits" : "paid_feature");
+  if (!created.length && !reused.length) throw outOfCredits(access);
 
   if (created.length) {
     await db.from("projects").update({ status: "generating" }).eq("id", project.id);
     background(Promise.all(created.map((id) => processGeneration(id))));
-    await trackGenerationMilestones(db, user.id, project.id, allowance.remaining.generations, created.length, !allowance.paid);
+    if (!project.org_id) {
+      const a = await getAllowance(user.id);
+      await trackGenerationMilestones(db, user.id, project.id, a.free.remaining + created.length, created.length, !access.paid);
+    } else await track("business_session", user.id, project.id, { looks: created.length });
   }
-  return json(req, { generationIds: [...reused, ...created], created: created.length, partial: outOfCredits });
+  return json(req, { generationIds: [...reused, ...created], created: created.length, partial: outOf });
 }
 
 /** "Generate another": a new distinct direction proposed by the text model. */
@@ -127,8 +127,8 @@ export async function generateAnother(req: Request, user: AuthedUser, body: Reco
   const key = idemKey(body.idempotencyKey);
   const project = await ownedProject(user, body.projectId);
   if (!project.recommendations || !project.brief) throw new HttpError(409, "invalid_input");
-  const { s, allowance } = await commonGenerationGuards(req, user);
-  if (allowance.remaining.generations <= 0) throw new HttpError(402, allowance.paid ? "insufficient_credits" : "paid_feature");
+  const { s, access } = await guards(req, user, project);
+  if (access.remaining.generations <= 0) throw outOfCredits(access);
   const db = admin();
 
   const { data: dup } = await db.from("generations").select("id").eq("idempotency_key", key).maybeSingle();
@@ -149,20 +149,23 @@ export async function generateAnother(req: Request, user: AuthedUser, body: Reco
     throw new HttpError(502, "generation_failed");
   }
 
-  const r = await enqueueConcept(db, { user, projectId: project.id, brief: project.brief, rec, key, paid: allowance.paid, refs: await referenceCount(db, project.id), s });
-  if (r === "insufficient") throw new HttpError(402, allowance.paid ? "insufficient_credits" : "paid_feature");
+  const r = await enqueueConcept(db, { user, project, brief: project.brief as StyleBrief, rec, key, paid: access.paid, refs: await referenceCount(db, project.id), s });
+  if (r === "insufficient") throw outOfCredits(access);
   await db.from("projects").update({ status: "generating", recommendations: [...recs, rec] }).eq("id", project.id);
   background(processGeneration(r.id));
-  await trackGenerationMilestones(db, user.id, project.id, allowance.remaining.generations, 1, !allowance.paid);
+  if (!project.org_id) {
+    const a = await getAllowance(user.id);
+    await trackGenerationMilestones(db, user.id, project.id, a.free.remaining + 1, 1, !access.paid);
+  }
   return json(req, { generationIds: [r.id], created: 1 });
 }
 
-/** Edits an existing generated hairstyle (not a new style). Paid allowance: 2 per period. */
+/** Edits an existing generated hairstyle (not a new style). */
 export async function alter(req: Request, user: AuthedUser, body: Record<string, unknown>) {
   const key = idemKey(body.idempotencyKey);
   const parent = await ownedGeneration(user, body.generationId);
   if (parent.status !== "succeeded" || !["concept", "alteration"].includes(parent.generation_type)) throw new HttpError(409, "invalid_input");
-  await ownedProject(user, parent.project_id);
+  const project = await ownedProject(user, parent.project_id);
 
   const presets = (Array.isArray(body.presets) ? body.presets : [])
     .filter((p): p is string => (ALTERATION_PRESETS as readonly string[]).includes(p as string));
@@ -170,16 +173,13 @@ export async function alter(req: Request, user: AuthedUser, body: Record<string,
   const instruction = [...presets, free].filter(Boolean).join(". ");
   if (!instruction) throw new HttpError(400, "invalid_input");
 
-  const { s, allowance } = await commonGenerationGuards(req, user);
+  const { s, access } = await guards(req, user, project);
   const db = admin();
   const { data: dup } = await db.from("generations").select("id").eq("idempotency_key", key).maybeSingle();
   if (dup) return json(req, { generationId: dup.id });
 
-  const { data: usageId, error } = await db.rpc("reserve_usage", { p_user: user.id, p_project: parent.project_id, p_type: "alteration", p_key: `usage:${key}` });
-  if (error) {
-    if (isInsufficient(error)) throw new HttpError(402, allowance.paid ? "insufficient_credits" : "paid_feature");
-    throw new HttpError(500, "server_error");
-  }
+  const r = await reserveFor(user, project, "alteration", `usage:${key}`);
+  if (r === "insufficient") throw outOfCredits(access);
   const id = crypto.randomUUID();
   const rec = parent.recommendation as Recommendation | null;
   const { error: insErr } = await db.from("generations").insert({
@@ -187,11 +187,11 @@ export async function alter(req: Request, user: AuthedUser, body: Record<string,
     direction: parent.direction, view: "front", recommendation: rec, instruction,
     prompt_version: PROMPT_VERSION, prompt: buildAlterationPrompt(rec, instruction),
     model: s.models.final, quality: s.image_quality.alteration, size: s.image_quality.size,
-    usage_id: usageId, idempotency_key: key, concept_only: parent.concept_only,
+    usage_id: r.usageId, idempotency_key: key, concept_only: parent.concept_only,
     expires_at: parent.expires_at,
   });
   if (insErr) {
-    await db.rpc("finalize_usage", { p_usage: usageId, p_success: false });
+    await db.rpc("finalize_usage", { p_usage: r.usageId, p_success: false });
     throw new HttpError(500, "server_error");
   }
   await db.from("projects").update({ status: "generating" }).eq("id", parent.project_id);

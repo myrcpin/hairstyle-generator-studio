@@ -5,6 +5,7 @@ import { usePublicConfig } from "../lib/publicConfig";
 import { APP_NAME } from "../lib/config";
 import { formatPrice } from "../../supabase/functions/_shared/core/pricing.ts";
 import { PricingTable } from "./Pricing";
+import { pendingReferral } from "../lib/referral";
 
 /** Real example photography lives in /public/examples (see README). Falls back to a neutral frame. */
 function ExampleImage({ src, alt, label }: { src: string; alt: string; label: string }) {
@@ -27,12 +28,19 @@ function ExampleImage({ src, alt, label }: { src: string; alt: string; label: st
 }
 
 export default function Landing() {
-  const { plan, currency } = usePublicConfig();
+  const { plan, pack, currency } = usePublicConfig();
+  const invited = pendingReferral();
   useEffect(() => { trackClient("landing_viewed"); }, []);
   const price = plan.prices[currency]?.amount;
+  const packPrice = pack.prices[currency]?.amount;
 
   return (
     <>
+      {invited && (
+        <div role="status" className="border-b border-line bg-card">
+          <p className="container-x py-3 text-[14px] text-ink-2">A friend invited you — try 3 styles free, and get a bonus style if you pick up a {pack.name}.</p>
+        </div>
+      )}
       <section className="container-x grid gap-10 pb-16 pt-10 sm:pt-16 lg:grid-cols-[1.1fr_1fr] lg:items-center">
         <div>
           <p className="eyebrow">Personal hairstyle previews</p>
@@ -134,14 +142,26 @@ export default function Landing() {
           {[
             ["Will it look exactly like this in real life?", "No image can promise that. The looks are realistic visual concepts based on your photo, designed to help you and your stylist agree on a direction. We flag styles that need growth first or that are concepts only."],
             ["Do I need to know hairstyle terms?", "Not at all. Describe it how you'd tell a friend. We translate it into cutting direction for your stylist."],
-            ["What does the free version include?", `Three personalised concepts at standard resolution. Plus${price ? ` (${formatPrice(price, currency)}/month)` : ""} adds more styles, alterations, the full multi-angle Hairstyle Card, downloads, QR sharing and email.`],
-            ["Can I cancel?", "Yes, any time from your account. You keep Plus until the end of the period you've paid for."],
+            ["What does the free version include?", `Three personalised concepts at standard resolution. The ${pack.name}${packPrice ? ` (${formatPrice(packPrice, currency)} once)` : ""} adds more styles, an alteration and the full multi-angle Hairstyle Card with downloads, QR sharing and email. Plus${price ? ` (${formatPrice(price, currency)}/month)` : ""} is the monthly option.`],
+            ["Is the Starter Pack a subscription?", "No. You pay once and nothing renews. Plus is the only subscription, and you can cancel it any time from your account."],
+            ["I'm a hairdresser — can I use this with clients?", "Yes. Salon plans let your team run consultations on the salon iPad or phone, bill to the salon, and hand clients a Hairstyle Card with your name, logo and booking link."],
           ].map(([q, a]) => (
             <details key={q} className="group py-4">
               <summary className="cursor-pointer list-none text-[18px] font-medium marker:hidden">{q}<span className="float-right text-muted group-open:rotate-45 transition-transform" aria-hidden="true">+</span></summary>
               <p className="mt-2 max-w-3xl text-ink-2">{a}</p>
             </details>
           ))}
+        </div>
+      </section>
+
+      <section className="border-y border-line/70 bg-card py-14">
+        <div className="container-x grid gap-6 md:grid-cols-[1.4fr_1fr] md:items-center">
+          <div>
+            <p className="eyebrow">For salons & barbershops</p>
+            <h2 className="mt-2 text-[40px] leading-tight">Agree the cut before the first snip.</h2>
+            <p className="mt-2 max-w-xl text-ink-2">Run consultations on the salon iPad, show clients three looks on their own photo, and send them a Hairstyle Card with your branding and booking link.</p>
+          </div>
+          <Link to="/business" className="btn-secondary justify-self-start md:justify-self-end">See salon plans</Link>
         </div>
       </section>
 

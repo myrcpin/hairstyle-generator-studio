@@ -4,6 +4,7 @@ import { supabase } from "./supabase";
 import { callFn } from "./api";
 import { isConfigured } from "./config";
 import type { Allowance, Profile } from "./types";
+import { attachPendingReferral } from "./referral";
 
 interface AuthState {
   ready: boolean;
@@ -33,6 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ]);
     setProfile((data as Profile) ?? null);
     setAllowance(allow);
+    if (s.user.email_confirmed_at) void attachPendingReferral();
   }, []);
 
   useEffect(() => {

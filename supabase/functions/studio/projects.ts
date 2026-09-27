@@ -1,4 +1,4 @@
-import { admin, type AuthedUser, getAllowance } from "../_shared/db.ts";
+import { admin, type AuthedUser } from "../_shared/db.ts";
 import { HttpError, json } from "../_shared/http.ts";
 import { daysFromNow, getSettings } from "../_shared/settings.ts";
 import { deviceHash, ipHash, rateLimit } from "../_shared/ratelimit.ts";
@@ -10,7 +10,8 @@ import { checkImage } from "../_shared/core/image.ts";
 import { describeRequest, parseStyleRequest, requestKey } from "../_shared/core/request.ts";
 import { ANALYSIS_SYSTEM_PROMPT } from "../_shared/core/prompts.ts";
 import { ANALYSIS_JSON_SCHEMA, InvalidModelOutput, sanitizeAnalysis, type Analysis } from "../_shared/core/brief.ts";
-import { ownedProject } from "./common.ts";
+import { accessFor, isOrgMember, ownedProject } from "./common.ts";
+import { isUuid } from "../_shared/http.ts";
 
 const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 
@@ -20,7 +21,16 @@ export async function createProject(req: Request, user: AuthedUser, body: Record
   await rateLimit(`create:${ip}`, 3600, s.rate_limits.create_project_per_ip_hour);
 
   const consent = (body.consent ?? {}) as Record<string, unknown>;
-  if (consent.terms !== true || consent.processing !== true) throw new HttpError(400, "consent_required");
+  // Salon consultation: staff confirm the client has agreed (the client is the photo subject).
+  let orgId: string | null = null;
+  if (body.orgId !== undefined) {
+    if (!isUuid(body.orgId) || !(await isOrgMember(body.orgId, user.id))) throw new HttpError(403, "org_required");
+    const access = await accessFor(user, { org_id: body.orgId });
+    if (!access.paid) throw new HttpError(402, "org_inactive");
+    if (consent.clientConsent !== true) throw new HttpError(400, "consent_required");
+    orgId = body.orgId;
+  } else if (consent.terms !== true || consent.processing !== true) throw new HttpError(400, "consent_required");
+  const clientLabel = orgId && typeof body.clientLabel === "string" ? body.clientLabel.trim().slice(0, 60) || null : null;
 
   const files = Array.isArray(body.files) ? body.files as Record<string, unknown>[] : [];
   const selfies = files.filter((f) => f.type === "selfie");
@@ -40,7 +50,7 @@ export async function createProject(req: Request, user: AuthedUser, body: Record
   if (dev) await db.from("users").update({ device_hash: dev }).eq("id", user.id).is("device_hash", null);
 
   const { data: project, error } = await db.from("projects").insert({
-    user_id: user.id, ip_hash: ip, expires_at: daysFromNow(s.retention.generation_days),
+    user_id: user.id, ip_hash: ip, expires_at: daysFromNow(s.retention.generation_days), org_id: orgId, client_label: clientLabel,
   }).select("id").single();
   if (error || !project) throw new HttpError(500, "server_error");
 
@@ -153,7 +163,7 @@ export async function analyse(req: Request, user: AuthedUser, body: Record<strin
 export async function projectUrls(req: Request, user: AuthedUser, body: Record<string, unknown>) {
   const project = await ownedProject(user, body.projectId);
   const db = admin();
-  const allowance = await getAllowance(user.id);
+  const allowance = await accessFor(user, project);
   const [{ data: sources }, { data: gens }] = await Promise.all([
     db.from("source_images").select("id,type,storage_path").eq("project_id", project.id).eq("uploaded", true),
     db.from("generations").select("id,storage_path").eq("project_id", project.id).eq("status", "succeeded"),
@@ -175,7 +185,7 @@ export async function projectUrls(req: Request, user: AuthedUser, body: Record<s
 
 export async function saveProject(req: Request, user: AuthedUser, body: Record<string, unknown>) {
   const project = await ownedProject(user, body.projectId);
-  const allowance = await getAllowance(user.id);
+  const allowance = await accessFor(user, project);
   if (!allowance.paid) throw new HttpError(402, "paid_feature");
   const s = await getSettings();
   const saved = body.saved !== false;
@@ -206,9 +216,9 @@ export async function deleteProjectData(userId: string, projectId: string) {
 }
 
 export async function deleteProject(req: Request, user: AuthedUser, body: Record<string, unknown>) {
-  const { data } = await admin().from("projects").select("id,user_id").eq("id", String(body.projectId)).maybeSingle();
-  if (!data || data.user_id !== user.id) throw new HttpError(404, "not_found");
-  await deleteProjectData(user.id, data.id);
+  const { data } = await admin().from("projects").select("id,user_id,org_id").eq("id", String(body.projectId)).maybeSingle();
+  if (!data || (data.user_id !== user.id && !(data.org_id && await isOrgMember(data.org_id, user.id)))) throw new HttpError(404, "not_found");
+  await deleteProjectData(data.user_id, data.id);
   await track("project_deleted", user.id, null);
   return json(req, { deleted: true });
 }

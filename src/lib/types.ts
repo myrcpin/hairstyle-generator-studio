@@ -18,6 +18,8 @@ export interface Profile {
 
 export interface Allowance {
   paid: boolean;
+  subscribed: boolean;
+  access_until: string | null;
   subscription_status: string;
   period_end: string | null;
   free: { limit: number; used: number; remaining: number };
@@ -34,6 +36,8 @@ export interface Project {
   saved: boolean;
   created_at: string;
   expires_at: string;
+  org_id?: string | null;
+  client_label?: string | null;
 }
 
 export interface Generation {
@@ -63,4 +67,6 @@ export interface CardPayload {
   publicUrl?: string | null;
   revoked?: boolean;
   expiresAt: string;
+  brandLogo?: string | null;
+  orgId?: string | null;
 }

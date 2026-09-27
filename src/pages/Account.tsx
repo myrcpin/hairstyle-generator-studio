@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth";
 import { callFn, errorMessage } from "../lib/api";
 import type { Project } from "../lib/types";
 import { Alert, Badge, Modal, PageTitle, Spinner } from "../components/ui";
+import { ReferralPanel } from "../components/ReferralPanel";
 
 interface CardRow { id: string; project_id: string; tier: string; card_data: { style_name: string }; created_at: string; revoked_at: string | null }
 
@@ -56,12 +57,15 @@ export default function Account() {
       <section className="grid gap-4 border border-line bg-card p-5 sm:grid-cols-2">
         <div>
           <p className="eyebrow">Plan</p>
-          <p className="mt-1 text-[22px]">{STATUS_TEXT[status]}</p>
+          <p className="mt-1 text-[22px]">{!allowance?.subscribed && allowance?.access_until ? "Plus access (no subscription)" : STATUS_TEXT[status]}</p>
+          {!allowance?.subscribed && allowance?.access_until && (
+            <p className="text-[14px] text-ink-2">Plus features active until {new Date(allowance.access_until).toLocaleDateString()} — from a Starter Pack or a free referral month.</p>
+          )}
           {status === "cancelled" && periodEnd && <p className="text-[14px] text-ink-2">You keep Plus until {periodEnd}.</p>}
           {status === "active" && periodEnd && <p className="text-[14px] text-ink-2">Renews {periodEnd}.</p>}
           {(status === "suspended" || status === "past_due") && <p className="text-[14px] text-bad">Please update your payment method in PayPal to keep Plus.</p>}
           <div className="mt-3 flex flex-wrap gap-2">
-            {!allowance?.paid && <Link to="/pricing" className="btn-primary min-h-10">Get Plus</Link>}
+            {!allowance?.paid && <Link to="/pricing" className="btn-primary min-h-10">Get more styles</Link>}
             {["active", "past_due", "suspended"].includes(status) && <button className="btn-ghost -ml-3" onClick={() => setConfirmCancel(true)}>Cancel subscription</button>}
           </div>
         </div>
@@ -69,18 +73,23 @@ export default function Account() {
           <p className="eyebrow">This period</p>
           {allowance ? (
             <ul className="mt-1 space-y-1 text-[15px]">
-              {allowance.paid ? (
+              {allowance.subscribed ? (
                 <>
                   <li>{allowance.subscription.generations.used} of {allowance.subscription.generations.limit} new styles used</li>
                   <li>{allowance.subscription.alterations.used} of {allowance.subscription.alterations.limit} alterations used</li>
                   <li>{allowance.subscription.card_builds.used} of {allowance.subscription.card_builds.limit} full cards built</li>
                 </>
               ) : <li>{allowance.free.used} of {allowance.free.limit} free styles used</li>}
+              {!allowance.subscribed && allowance.paid && <li>{allowance.remaining.generations} styles, {allowance.remaining.alterations} alterations and {allowance.remaining.card_builds} full cards left</li>}
             </ul>
           ) : <Spinner />}
           <p className="mt-3 text-[13px] text-muted">Signed in as {profile?.email}</p>
         </div>
       </section>
+
+      <SurveyNudge />
+
+      <div className="mt-8"><ReferralPanel /></div>
 
       <section className="mt-10">
         <div className="flex items-end justify-between">
@@ -148,6 +157,21 @@ export default function Account() {
           await callFn("studio", { action: "delete_account", confirm: "DELETE" }); await signOut(); navigate("/");
         })}>{busy === "delete" ? <Spinner /> : "Delete everything"}</button>
       </Modal>
+    </div>
+  );
+}
+
+function SurveyNudge() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    callFn<{ eligible: boolean; completed: boolean }>("studio", { action: "get_survey" })
+      .then((r) => setShow(r.eligible && !r.completed)).catch(() => undefined);
+  }, []);
+  if (!show) return null;
+  return (
+    <div className="mt-6 flex flex-col gap-3 border border-ink bg-card p-5 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-[15px]"><strong>5 quick questions</strong> about how you get your hair cut — about 20 seconds, and you get a bonus style.</p>
+      <Link to="/survey" className="btn-primary min-h-10">Answer now</Link>
     </div>
   );
 }

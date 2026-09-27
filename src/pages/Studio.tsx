@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { callFn, errorMessage } from "../lib/api";
 import { supabase } from "../lib/supabase";
@@ -59,7 +59,10 @@ function PhotoSlot({ label, hint, image, onPick, onClear, required }: { label: s
 
 export default function Studio() {
   const navigate = useNavigate();
-  const { ensureSession } = useAuth();
+  const { ensureSession, isVerified } = useAuth();
+  const [params] = useSearchParams();
+  const orgId = params.get("org");
+  const [clientLabel, setClientLabel] = useState("");
   const [selfie, setSelfie] = useState<PreparedImage | null>(null);
   const [refs, setRefs] = useState<(PreparedImage | null)[]>([null]);
   const [description, setDescription] = useState("");
@@ -90,7 +93,7 @@ export default function Studio() {
   async function submit() {
     setError(null);
     if (!selfie) return setError("Please add a photo of yourself first.");
-    if (!consentTerms) return setError("Please confirm you agree to the terms and to us processing your photo.");
+    if (!consentTerms) return setError(orgId ? "Please confirm your client has agreed to their photo being used." : "Please confirm you agree to the terms and to us processing your photo.");
     if (refImages.length && !consentRights) return setError("Please confirm you have permission to use the reference photos.");
     try {
       setStatus("Uploading your photo…");
@@ -98,7 +101,8 @@ export default function Studio() {
       const files = [{ type: "selfie", img: selfie }, ...refImages.map((img) => ({ type: "reference", img }))];
       const project = await callFn<{ projectId: string; uploads: { type: string; path: string; token: string }[] }>("studio", {
         action: "create_project",
-        consent: { terms: true, processing: true, rights: consentRights },
+        consent: orgId ? { clientConsent: true, rights: consentRights } : { terms: true, processing: true, rights: consentRights },
+        ...(orgId ? { orgId, clientLabel } : {}),
         files: files.map((f) => ({ type: f.type, contentType: f.img.contentType, size: f.img.blob.size })),
       });
       // Signed upload URLs: the browser never gets general storage access.
@@ -139,11 +143,13 @@ export default function Studio() {
 
       {step === 1 && (
         <section aria-labelledby="photo-h">
-          <h1 id="photo-h" className="text-[44px] leading-tight">Start with a photo of you.</h1>
+          {orgId && !isVerified && <div className="mb-4"><Alert tone="warn">Please <Link to={`/signin?next=/start?org=${orgId}`} className="underline">sign in</Link> with your salon account to start a client consultation.</Alert></div>}
+          {orgId && <p className="eyebrow mb-2">Client consultation</p>}
+          <h1 id="photo-h" className="text-[44px] leading-tight">{orgId ? "Start with a photo of your client." : "Start with a photo of you."}</h1>
           <p className="mt-3 text-ink-2">Best results: front-facing photo, good lighting, face visible, hair visible, no heavy filters.</p>
           <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div className="col-span-2 sm:col-span-1">
-              <PhotoSlot label="Your photo" hint="JPG, PNG or WebP · up to 10 MB" image={selfie} required onPick={(f) => pick(f, setSelfie)} onClear={() => setSelfie(null)} />
+              <PhotoSlot label={orgId ? "Client photo" : "Your photo"} hint="JPG, PNG or WebP · up to 10 MB" image={selfie} required onPick={(f) => pick(f, setSelfie)} onClear={() => setSelfie(null)} />
             </div>
             {refs.map((r, i) => (
               <PhotoSlot key={i} label={i === 0 ? "A style you like" : "Another reference"} hint="A hairstyle photo to use as reference" image={r}
@@ -162,7 +168,7 @@ export default function Studio() {
       {step === 2 && (
         <section aria-labelledby="describe-h" className="space-y-7">
           <div>
-            <h1 id="describe-h" className="text-[44px] leading-tight">What are you looking for?</h1>
+            <h1 id="describe-h" className="text-[44px] leading-tight">{orgId ? "What is your client looking for?" : "What are you looking for?"}</h1>
             <p className="mt-3 text-ink-2">Describe it in your own words. No hairstyle terms needed — everything below is optional.</p>
           </div>
           <div>
@@ -185,11 +191,24 @@ export default function Studio() {
           </fieldset>
           <SingleChoice legend="Colour" options={COLOUR} value={colour} onChange={setColour} />
 
+          {orgId && (
+            <div>
+              <label htmlFor="client-label" className="mb-1 block text-[14px] font-medium">Client name or initials <span className="font-normal text-muted">(optional, for your records)</span></label>
+              <input id="client-label" className="input" maxLength={60} value={clientLabel} onChange={(e) => setClientLabel(e.target.value)} />
+            </div>
+          )}
           <div className="space-y-3 border-t border-line pt-6 text-[15px]">
+            {orgId ? (
+              <label className="flex items-start gap-3">
+                <input type="checkbox" className="mt-1 h-5 w-5 accent-ink" checked={consentTerms} onChange={(e) => setConsentTerms(e.target.checked)} />
+                <span>My client has agreed to their photo being used to create hairstyle previews. Photos are deleted automatically after a few days (<Link to="/privacy" className="underline" target="_blank">Privacy Policy</Link>).</span>
+              </label>
+            ) : (
             <label className="flex items-start gap-3">
               <input type="checkbox" className="mt-1 h-5 w-5 accent-ink" checked={consentTerms} onChange={(e) => setConsentTerms(e.target.checked)} />
               <span>I agree to the <Link to="/terms" className="underline" target="_blank">Terms</Link> and to my photo being processed to create hairstyle images, as described in the <Link to="/privacy" className="underline" target="_blank">Privacy Policy</Link>. I'm 18 or over and this is a photo of me.</span>
             </label>
+            )}
             {refImages.length > 0 && (
               <label className="flex items-start gap-3">
                 <input type="checkbox" className="mt-1 h-5 w-5 accent-ink" checked={consentRights} onChange={(e) => setConsentRights(e.target.checked)} />

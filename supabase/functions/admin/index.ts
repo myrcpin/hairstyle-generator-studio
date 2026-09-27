@@ -1,7 +1,7 @@
 import { HttpError, json, readJson, serve } from "../_shared/http.ts";
 import { admin, requireUser } from "../_shared/db.ts";
 
-const EDITABLE_SETTINGS = ["limits", "models", "image_quality", "retention", "rate_limits", "features", "cost_estimates_usd"] as const;
+const EDITABLE_SETTINGS = ["limits", "models", "image_quality", "retention", "rate_limits", "features", "cost_estimates_usd", "referrals", "survey"] as const;
 
 function validSettingValue(key: string, value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -9,6 +9,8 @@ function validSettingValue(key: string, value: unknown): boolean {
     if (!/^[a-z0-9_]{1,40}$/.test(k)) return false;
     if (key === "models" || key === "image_quality") {
       if (typeof v !== "string" || !/^[A-Za-z0-9._x-]{1,60}$/.test(v)) return false;
+    } else if (key === "referrals" && k === "qualifying_plans") {
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && /^[a-z_]{2,40}$/.test(x))) return false;
     } else if (key === "features") {
       if (typeof v !== "boolean") return false;
     } else if (key === "cost_estimates_usd") {
@@ -30,9 +32,10 @@ serve(async (req) => {
     case "stats": {
       const { data, error } = await db.rpc("admin_stats");
       if (error) throw new HttpError(500, "server_error");
+      const { data: growth } = await db.rpc("admin_growth_stats");
       const { data: failures } = await db.from("generations").select("error_code,generation_type,model,created_at")
         .eq("status", "failed").order("created_at", { ascending: false }).limit(20);
-      return json(req, { stats: data, recentFailures: failures ?? [] });
+      return json(req, { stats: data, growth, recentFailures: failures ?? [] });
     }
     case "get_settings": {
       const [{ data: settings }, { data: plans }] = await Promise.all([
@@ -70,6 +73,32 @@ serve(async (req) => {
       const { error } = await db.from("plans").update(patch).eq("code", code);
       if (error) throw new HttpError(400, "invalid_input");
       return json(req, { ok: true });
+    }
+    case "survey": {
+      const { data, error } = await db.rpc("admin_survey_summary");
+      if (error) throw new HttpError(500, "server_error");
+      return json(req, data);
+    }
+    case "update_survey_question": {
+      const key = String(body.key);
+      const patch: Record<string, unknown> = {};
+      if (typeof body.active === "boolean") patch.active = body.active;
+      if (Number.isInteger(body.sort)) patch.sort = body.sort;
+      if (body.active === true) {
+        const { count } = await db.from("survey_questions").select("key", { count: "exact", head: true }).eq("active", true).neq("key", key);
+        if ((count ?? 0) >= 5) return json(req, { error: { code: "invalid_input", message: "Only 5 questions can be active. Deactivate one first." } }, 400);
+      }
+      await db.from("survey_questions").update(patch).eq("key", key);
+      return json(req, { ok: true });
+    }
+    case "survey_csv": {
+      // Pseudonymised export: a stable per-export hash instead of user ids/emails.
+      const { data } = await db.from("survey_responses").select("user_id,question_key,answer,currency,created_at").order("created_at").limit(50000);
+      const salt = crypto.randomUUID();
+      const hash = async (v: string) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt + v)))].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const lines = ["respondent,question,answer,currency,answered_at"];
+      for (const r of data ?? []) lines.push([await hash(r.user_id), r.question_key, r.answer, r.currency ?? "", r.created_at].join(","));
+      return json(req, { csv: lines.join("\n") });
     }
     default:
       throw new HttpError(400, "invalid_input");

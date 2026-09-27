@@ -50,6 +50,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <Logo />
           <nav aria-label="Main" className="flex items-center gap-1 sm:gap-3">
             <NavLink to="/pricing" className={navCls}>Pricing</NavLink>
+            <NavLink to="/business" className={`${navCls({ isActive: pathname.startsWith("/business") })} hidden sm:inline`}>For salons</NavLink>
             {session && isVerified ? (
               <>
                 {profile?.is_admin && <NavLink to="/admin" className={navCls}>Admin</NavLink>}
@@ -74,6 +75,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <Link to="/terms" className="hover:text-ink">Terms</Link>
             <Link to="/cookies" className="hover:text-ink">Cookies</Link>
             <Link to="/pricing" className="hover:text-ink">Pricing</Link>
+            <Link to="/business" className="hover:text-ink">For salons</Link>
           </nav>
         </div>
       </footer>

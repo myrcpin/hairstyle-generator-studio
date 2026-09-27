@@ -24,6 +24,15 @@ export class MockBackend {
   gens: Gen[] = [];
   cards: Json[] = [];
   usage = new Map<string, { free: number; gen: number; alt: number; card: number }>();
+  grants = new Map<string, { gen: number; alt: number; card: number; access: boolean; source: string }[]>();
+  surveys = new Map<string, Record<string, string>>();
+  refCodes = new Map<string, string>(); // code -> userId
+  referrals: { referrer: string; referred: string; status: string }[] = [];
+  rewards: string[] = [];
+  payments: { userId: string; plan: string }[] = [];
+  orgs: Json[] = [];
+  orgMembers: { org_id: string; user_id: string; role: string }[] = [];
+  orgUsage = new Map<string, { gen: number; alt: number; card: number }>();
   events: string[] = [];
   emails: { to: string; cardId: string }[] = [];
   seq = 0;
@@ -47,26 +56,48 @@ export class MockBackend {
   }
   allowance(u: User) {
     const x = this.usage.get(u.id) ?? { free: 0, gen: 0, alt: 0, card: 0 };
-    const paid = u.subscription_status === "active" || (u.subscription_status === "cancelled" && !!u.period_end && new Date(u.period_end) > new Date());
+    const g = this.grants.get(u.id) ?? [];
+    const subscribed = u.subscription_status === "active" || (u.subscription_status === "cancelled" && !!u.period_end && new Date(u.period_end) > new Date());
+    const hasAccessGrant = g.some((z) => z.access);
+    const paid = subscribed;
     const sub = { generations: { limit: paid ? 7 : 0, used: x.gen, remaining: paid ? 7 - x.gen : 0 }, alterations: { limit: paid ? 2 : 0, used: x.alt, remaining: paid ? 2 - x.alt : 0 }, card_builds: { limit: paid ? 3 : 0, used: x.card, remaining: paid ? 3 - x.card : 0 } };
+    const gr = { generations: g.reduce((a, z) => a + z.gen, 0), alterations: g.reduce((a, z) => a + z.alt, 0), card_builds: g.reduce((a, z) => a + z.card, 0) };
     return {
-      paid, subscription_status: u.subscription_status, period_end: u.period_end, email_verified: !!u.email_confirmed_at,
-      free: { limit: 3, used: x.free, remaining: 3 - x.free }, subscription: sub,
-      remaining: { generations: 3 - x.free + sub.generations.remaining, alterations: sub.alterations.remaining, card_builds: sub.card_builds.remaining },
+      paid: subscribed || hasAccessGrant, subscribed, access_until: hasAccessGrant ? new Date(Date.now() + 60 * 86400_000).toISOString() : null,
+      subscription_status: u.subscription_status, period_end: u.period_end, email_verified: !!u.email_confirmed_at,
+      free: { limit: 3, used: x.free, remaining: 3 - x.free }, subscription: sub, grants: gr,
+      remaining: { generations: 3 - x.free + sub.generations.remaining + gr.generations, alterations: sub.alterations.remaining + gr.alterations, card_builds: sub.card_builds.remaining + gr.card_builds },
     };
+  }
+  reserveProject(u: User, projectId: string, type: "generation" | "alteration" | "card"): string | null {
+    const pr = this.projects.find((p) => p.id === projectId);
+    if (pr?.org_id) {
+      const org = this.orgs.find((o) => o.id === pr.org_id)!;
+      if (org.subscription_status !== "active") return null;
+      const x = this.orgUsage.get(String(org.id)) ?? { gen: 0, alt: 0, card: 0 };
+      this.orgUsage.set(String(org.id), x);
+      const k = type === "generation" ? "gen" : type === "alteration" ? "alt" : "card";
+      const limit = { gen: 60, alt: 20, card: 40 }[k];
+      if (x[k] >= limit) return null;
+      x[k]++;
+      return "org";
+    }
+    return this.reserve(u, type);
   }
   reserve(u: User, type: "generation" | "alteration" | "card"): string | null {
     const x = this.usage.get(u.id) ?? { free: 0, gen: 0, alt: 0, card: 0 };
     this.usage.set(u.id, x);
     const a = this.allowance(u);
+    const grant = (k: "gen" | "alt" | "card") => { const z = (this.grants.get(u.id) ?? []).find((q) => q[k] > 0); if (z) { z[k]--; return true; } return false; };
     if (type === "generation") {
       if (a.subscription.generations.remaining > 0) { x.gen++; return "gen"; }
+      if (grant("gen")) return "grant";
       if (a.free.remaining > 0) { x.free++; return "free"; }
       return null;
     }
-    if (type === "alteration") { if (a.subscription.alterations.remaining > 0) { x.alt++; return "alt"; } return null; }
+    if (type === "alteration") { if (a.subscription.alterations.remaining > 0) { x.alt++; return "alt"; } return grant("alt") ? "grant" : null; }
     if (a.subscription.card_builds.remaining > 0) { x.card++; return "card"; }
-    return null;
+    return grant("card") ? "grant" : null;
   }
   refund(u: User, src: string) {
     const x = this.usage.get(u.id)!;
@@ -157,7 +188,11 @@ export class MockBackend {
 
     // ---------- PostgREST ----------
     if (p === "/rest/v1/rpc/public_config") {
-      return this.ok(route, { limits: { free_generations: 3, paid_generations: 7, paid_alterations: 2 }, plans: [{ code: "plus_monthly", kind: "subscription", name: "Plus", generations: 7, alterations: 2, card_builds: 3, prices: { GBP: { amount: "2.99" }, USD: { amount: "3.99" } } }] });
+      return this.ok(route, { limits: { free_generations: 3, paid_generations: 7, paid_alterations: 2 }, referrals: { friends_per_reward: 3, max_rewards: 3, reward_days: 30, referee_bonus_generations: 1 }, plans: [
+        { code: "starter_pack", kind: "one_time", name: "Starter Pack", generations: 5, alterations: 1, card_builds: 1, access_days: 60, prices: { GBP: { amount: "2.99" }, USD: { amount: "4.99" } } },
+        { code: "plus_monthly", kind: "subscription", name: "Plus", generations: 7, alterations: 2, card_builds: 3, prices: { GBP: { amount: "2.99" }, USD: { amount: "3.99" } } },
+        { code: "business_studio", kind: "business", name: "Salon", description: "Up to 3 staff.", generations: 60, alterations: 20, card_builds: 40, max_members: 3, prices: { GBP: { amount: "29.00" }, USD: { amount: "39.00" } } },
+      ] });
     }
     if (p.startsWith("/rest/v1/")) {
       const u = this.userFrom(route);
@@ -170,6 +205,9 @@ export class MockBackend {
         if (table === "projects") rows = this.projects.filter((x) => x.user_id === u.id);
         if (table === "generations") rows = this.gens.filter((x) => x.user_id === u.id) as unknown as Json[];
         if (table === "style_cards") rows = this.cards.filter((x) => x.user_id === u.id);
+        const myOrgs = this.orgMembers.filter((m) => m.user_id === u.id).map((m) => m.org_id);
+        if (table === "projects") rows = this.projects.filter((x) => x.user_id === u.id || (x.org_id && myOrgs.includes(String(x.org_id))));
+        if (table === "generations") rows = this.gens.filter((x) => x.user_id === u.id || this.projects.some((p) => p.id === x.project_id && p.org_id && myOrgs.includes(String(p.org_id)))) as unknown as Json[];
       }
       for (const [k, v] of url.searchParams) {
         if (["select", "order", "limit"].includes(k)) continue;
@@ -193,6 +231,7 @@ export class MockBackend {
     if (!u) return this.err(route, 401, "unauthorized", "Please sign in again to continue.");
     if (p === "/functions/v1/studio") return this.studio(route, u, body);
     if (p === "/functions/v1/billing") return this.billing(route, u, body);
+    if (p === "/functions/v1/business") return this.business(route, u, body);
     return this.err(route, 404, "not_found", "not found");
   }
 
@@ -207,12 +246,13 @@ export class MockBackend {
       images, original: pub ? null : `${BASE}/img/original`,
       qr: !pub && c.tier === "full" && c.public_token ? `${BASE}/qr/${c.public_token}` : null,
       publicUrl: !pub && c.tier === "full" && c.public_token ? `http://localhost:5174/style/${c.public_token}` : null,
+      orgId: (c.card_data as Json).brand ? ((c.card_data as Json).brand as Json).org_id : null, brandLogo: null,
       revoked: !!c.revoked_at, expiresAt: new Date(Date.now() + 90 * 86400_000).toISOString(),
     };
   }
 
   buildFull(u: User, c: Json) {
-    if (!this.reserve(u, "card")) return "insufficient_credits";
+    if (!this.reserveProject(u, String(c.project_id), "card")) return "insufficient_credits";
     const front = this.gens.find((g) => g.id === c.selected_generation_id)!;
     const views = ["three_quarter", "side", "back", ...((front.recommendation as Json)?.tied_back_relevant ? ["tied_back"] : [])];
     const data = c.card_data as { views: Json[] };
@@ -231,7 +271,9 @@ export class MockBackend {
       case "allowance": return this.ok(route, this.allowance(u));
       case "create_project": {
         const id = this.id();
-        this.projects.push({ id, user_id: u.id, status: "draft", brief: null, recommendations: null, rejection_reason: null, saved: false, created_at: this.now(), expires_at: new Date(Date.now() + 30 * 86400_000).toISOString() });
+        if (b.orgId && !this.orgMembers.some((m) => m.org_id === b.orgId && m.user_id === u.id)) return this.err(route, 403, "org_required", "You need to be part of a salon team to do that.");
+        if (b.orgId && !(b.consent as Json)?.clientConsent) return this.err(route, 400, "consent_required", "Please confirm consent.");
+        this.projects.push({ id, user_id: u.id, org_id: b.orgId ?? null, client_label: b.clientLabel ?? null, status: "draft", brief: null, recommendations: null, rejection_reason: null, saved: false, created_at: this.now(), expires_at: new Date(Date.now() + 30 * 86400_000).toISOString() });
         const files = b.files as { type: string }[];
         return this.ok(route, { projectId: id, uploads: files.map((f, i) => ({ imageId: `${id}-${i}`, type: f.type, path: `${u.id}/${id}/${i}.jpg`, token: "t" })) });
       }
@@ -256,7 +298,7 @@ export class MockBackend {
           ? recs.filter((r) => (!b.directions || (b.directions as string[]).includes(String(r.direction))) && r.direction !== "extra" && !this.gens.some((g) => g.project_id === pr.id && g.direction === r.direction && g.status !== "failed"))
           : [rec("extra", `Textured Crop ${this.seq}`)];
         for (const r of todo) {
-          const src = this.reserve(u, "generation");
+          const src = this.reserveProject(u, String(pr.id), "generation");
           if (!src) break;
           created.push(this.newGen(u, String(pr.id), "concept", String(r.direction), r).id);
           if (b.action === "generate_another") pr.recommendations = [...recs, r];
@@ -267,7 +309,7 @@ export class MockBackend {
       }
       case "alter": {
         const parent = this.gens.find((g) => g.id === b.generationId)!;
-        if (!this.reserve(u, "alteration")) return this.err(route, 402, this.allowance(u).paid ? "insufficient_credits" : "paid_feature", "That's part of Plus. Upgrade to unlock it.");
+        if (!this.reserveProject(u, parent.project_id, "alteration")) return this.err(route, 402, this.allowance(u).paid ? "insufficient_credits" : "paid_feature", "That's part of Plus. Upgrade to unlock it.");
         const g = this.newGen(u, parent.project_id, "alteration", parent.direction, parent.recommendation, { parent_generation_id: parent.id, instruction: [...(b.presets as string[]), b.instruction].filter(Boolean).join(". ") });
         this.events.push("alteration_requested");
         return this.ok(route, { generationId: g.id });
@@ -277,17 +319,23 @@ export class MockBackend {
         let c = this.cards.find((x) => x.selected_generation_id === g.id);
         if (!c) {
           const r = g.recommendation as Json;
+          const org = this.orgs.find((o) => o.id === this.projects.find((p) => p.id === g.project_id)?.org_id);
           c = { id: this.id(), project_id: g.project_id, user_id: u.id, selected_generation_id: g.id, tier: "preview", status: "ready", public_token: null, revoked_at: null, created_at: this.now(),
-            card_data: { style_name: r.name, description: r.description, feasibility: r.feasibility, feasibility_note: r.feasibility_note, what_to_ask_for: "Keep the overall length around shoulder level. Add light internal layers to reduce bulk.", keep: ["Enough length for a bun"], change: ["Less bulk at the ends"], length_guide: [{ area: "Overall", guidance: "Just above the shoulders" }], styling: ["Air-dry with a little cream"], maintenance: { summary: "Low upkeep.", trim_interval: "Every 8–12 weeks", daily_effort: "5 minutes" }, views: [{ view: "front", generation_id: g.id, status: "ready" }], generated_at: this.now(), prompt_version: "test" } };
+            card_data: { style_name: r.name, description: r.description, feasibility: r.feasibility, feasibility_note: r.feasibility_note, what_to_ask_for: "Keep the overall length around shoulder level. Add light internal layers to reduce bulk.", keep: ["Enough length for a bun"], change: ["Less bulk at the ends"], length_guide: [{ area: "Overall", guidance: "Just above the shoulders" }], styling: ["Air-dry with a little cream"], maintenance: { summary: "Low upkeep.", trim_interval: "Every 8–12 weeks", daily_effort: "5 minutes" }, views: [{ view: "front", generation_id: g.id, status: "ready" }], generated_at: this.now(), prompt_version: "test",
+              brand: org ? { org_id: org.id, name: org.name, booking_url: org.booking_url } : null } };
           this.cards.push(c);
           this.events.push("hairstyle_selected");
         }
         let upgradeBlocked = null;
-        if (c.tier === "preview" && this.allowance(u).paid) upgradeBlocked = this.buildFull(u, c);
+        const salon = this.projects.find((p) => p.id === g.project_id)?.org_id;
+        if (c.tier === "preview" && (this.allowance(u).paid || salon)) upgradeBlocked = this.buildFull(u, c);
         return this.ok(route, { cardId: c.id, upgradeBlocked });
       }
       case "card": { const c = this.cards.find((x) => x.id === b.cardId && x.user_id === u.id); return c ? this.ok(route, this.cardPayload(c)) : this.err(route, 404, "not_found", "We couldn't find that."); }
       case "email_card": {
+        const cc = this.cards.find((x) => x.id === b.cardId)!;
+        const isOrg = !!(cc.card_data as Json).brand;
+        if (isOrg) { this.emails.push({ to: String(b.to ?? u.email), cardId: String(b.cardId) }); return this.ok(route, { sent: true }); }
         if (!this.allowance(u).paid) return this.err(route, 402, "paid_feature", "That's part of Plus.");
         this.emails.push({ to: u.email!, cardId: String(b.cardId) });
         this.events.push("email_share");
@@ -297,6 +345,39 @@ export class MockBackend {
       case "share_card": { const c = this.cards.find((x) => x.id === b.cardId)!; Object.assign(c, { public_token: `tok_${"y".repeat(30)}${this.seq++}`, revoked_at: null }); return this.ok(route, {}); }
       case "delete_project": { this.projects = this.projects.filter((x) => x.id !== b.projectId); this.events.push("project_deleted"); return this.ok(route, { deleted: true }); }
       case "save_project": return this.ok(route, { saved: true });
+      case "get_survey": {
+        const eligible = this.payments.some((x) => x.userId === u.id) || u.subscription_status === "active";
+        return this.ok(route, { eligible, completed: this.surveys.has(u.id), currency: "GBP", rewardGenerations: 1, questions: [
+          { key: "cut_frequency", prompt: "How often do you get your hair cut?", kind: "single_choice", options: [{ value: "2_4_weeks", label: "Every 2–4 weeks" }, { value: "5_8_weeks", label: "Every 5–8 weeks" }, { value: "2_3_months", label: "Every 2–3 months" }, { value: "less_often", label: "Less often" }] },
+          { key: "cut_where", prompt: "Where do you usually get it cut?", kind: "single_choice", options: [{ value: "barber", label: "Barber" }, { value: "salon", label: "Salon" }] },
+          { key: "left_unhappy", prompt: "Have you ever left a haircut unhappy because it wasn't what you asked for?", kind: "yes_no", options: [] },
+          { key: "brings_reference", prompt: "Do you usually show your stylist a photo of what you want?", kind: "yes_no", options: [] },
+          { key: "spend_band", prompt: "Roughly how much do you spend on a haircut?", kind: "single_choice", options: [{ value: "under_15", label: "Under 15" }, { value: "15_30", label: "15–30" }] },
+        ] });
+      }
+      case "submit_survey": {
+        const a = b.answers as Record<string, string>;
+        if (Object.keys(a ?? {}).length !== 5) return this.err(route, 400, "survey_incomplete", "Please answer all five questions.");
+        const first = !this.surveys.has(u.id);
+        this.surveys.set(u.id, a);
+        if (first) { this.grants.set(u.id, [...(this.grants.get(u.id) ?? []), { gen: 1, alt: 0, card: 0, access: false, source: "survey" }]); this.events.push("survey_completed"); }
+        return this.ok(route, { ok: true, rewarded: first ? 1 : 0 });
+      }
+      case "get_referral": {
+        let code = [...this.refCodes.entries()].find(([, id]) => id === u.id)?.[0];
+        if (!code) { code = `FRIEND${this.refCodes.size + 10}`; this.refCodes.set(code, u.id); }
+        const mine = this.referrals.filter((r) => r.referrer === u.id);
+        const qualified = mine.filter((r) => r.status === "qualified").length;
+        const rewards = this.rewards.filter((r) => r === u.id).length;
+        return this.ok(route, { code, link: `http://localhost:5174/?ref=${code}`, joined: mine.length, qualified, rewards, maxRewards: 3, perReward: 3, inCycle: rewards >= 3 ? 3 : qualified - rewards * 3, capped: rewards >= 3 });
+      }
+      case "attach_referral": {
+        const referrer = this.refCodes.get(String(b.code));
+        if (!referrer || referrer === u.id || this.referrals.some((r) => r.referred === u.id)) return this.err(route, 400, "referral_not_eligible", "no");
+        this.referrals.push({ referrer, referred: u.id, status: "pending" });
+        this.events.push("referral_attached");
+        return this.ok(route, { attached: true });
+      }
       default: return this.err(route, 400, "invalid_input", "bad action");
     }
   }
@@ -305,11 +386,19 @@ export class MockBackend {
     switch (b.action) {
       case "create_subscription":
         if (!u.email_confirmed_at) return this.err(route, 403, "email_required", "Please verify your email.");
+        if (b.orgId) {
+          Object.assign(this.orgs.find((o) => o.id === b.orgId)!, { subscription_status: "pending", plan_code: b.plan });
+          return this.ok(route, { approveUrl: `http://localhost:5174/business/dashboard?org=${b.orgId}&billing=return&subscription_id=I-ORG`, subscriptionId: "I-ORG" });
+        }
         u.subscription_status = "pending";
         this.events.push("checkout_started");
         // Simulates PayPal approval redirecting back to our return URL.
         return this.ok(route, { approveUrl: "http://localhost:5174/billing/return?subscription_id=I-TESTSUB&ba_token=BA-1", subscriptionId: "I-TESTSUB" });
       case "confirm":
+        if (b.orgId) {
+          Object.assign(this.orgs.find((o) => o.id === b.orgId)!, { subscription_status: "active", current_period_end: new Date(Date.now() + 30 * 86400_000).toISOString() });
+          return this.ok(route, { status: "active", allowance: null });
+        }
         if (b.subscriptionId !== "I-TESTSUB") return this.err(route, 403, "forbidden", "You don't have access to that.");
         u.subscription_status = "active"; u.period_end = new Date(Date.now() + 30 * 86400_000).toISOString();
         this.events.push("subscription_completed");
@@ -318,7 +407,61 @@ export class MockBackend {
         u.subscription_status = "cancelled";
         this.events.push("subscription_cancelled");
         return this.ok(route, { allowance: this.allowance(u) });
+      case "buy_pack":
+        if (!u.email_confirmed_at) return this.err(route, 403, "email_required", "Please verify your email.");
+        return this.ok(route, { approveUrl: `http://localhost:5174/billing/pack-return?token=ORDER${this.seq++}X&PayerID=P1`, orderId: "ORDER1" });
+      case "capture_pack": {
+        if (!/^ORDER\d+X$/.test(String(b.orderId))) return this.err(route, 402, "payment_pending_capture", "We couldn't confirm your payment with PayPal.");
+        if (this.payments.some((x) => x.plan === b.orderId)) return this.ok(route, { ok: true, duplicate: true });
+        this.payments.push({ userId: u.id, plan: String(b.orderId) });
+        this.grants.set(u.id, [...(this.grants.get(u.id) ?? []), { gen: 5, alt: 1, card: 1, access: true, source: "purchase" }]);
+        this.events.push("pack_purchased");
+        const ref = this.referrals.find((r) => r.referred === u.id && r.status === "pending");
+        if (ref) {
+          ref.status = "qualified";
+          this.grants.get(u.id)!.push({ gen: 1, alt: 0, card: 0, access: false, source: "referee_bonus" });
+          const q = this.referrals.filter((r) => r.referrer === ref.referrer && r.status === "qualified").length;
+          const given = this.rewards.filter((r) => r === ref.referrer).length;
+          if (Math.floor(q / 3) > given && given < 3) {
+            this.rewards.push(ref.referrer);
+            this.grants.set(ref.referrer, [...(this.grants.get(ref.referrer) ?? []), { gen: 7, alt: 2, card: 3, access: true, source: "referral" }]);
+            this.events.push("referral_rewarded");
+          }
+        }
+        return this.ok(route, { ok: true, duplicate: false, allowance: this.allowance(u) });
+      }
       case "status": return this.ok(route, this.allowance(u));
+      default: return this.err(route, 400, "invalid_input", "bad");
+    }
+  }
+
+  async business(route: Route, u: User, b: Json) {
+    const member = (orgId: unknown) => this.orgMembers.find((m) => m.org_id === orgId && m.user_id === u.id);
+    switch (b.action) {
+      case "my_orgs": return this.ok(route, { orgs: this.orgMembers.filter((m) => m.user_id === u.id).map((m) => ({ role: m.role, ...this.orgs.find((o) => o.id === m.org_id)! })) });
+      case "create_org": {
+        if (this.orgs.some((o) => o.slug === b.slug)) return this.err(route, 409, "slug_taken", "That salon link is already taken. Please choose another.");
+        const id = this.id();
+        this.orgs.push({ id, name: b.name, slug: b.slug, booking_url: b.bookingUrl ?? null, logo_path: null, subscription_status: "none", plan_code: null, current_period_end: null });
+        this.orgMembers.push({ org_id: id, user_id: u.id, role: "owner" });
+        this.events.push("business_created");
+        return this.ok(route, { orgId: id });
+      }
+      case "get_org": {
+        const m = member(b.orgId);
+        if (!m) return this.err(route, 403, "org_required", "You need to be part of a salon team to do that.");
+        const org = this.orgs.find((o) => o.id === b.orgId)!;
+        const x = this.orgUsage.get(String(org.id)) ?? { gen: 0, alt: 0, card: 0 };
+        const c = (limit: number, used: number) => ({ limit, used, remaining: limit - used });
+        return this.ok(route, {
+          role: m.role, org: { ...org, logo_url: null },
+          allowance: { active: org.subscription_status === "active", members: this.orgMembers.filter((q) => q.org_id === org.id).length, max_members: 3, generations: c(60, x.gen), alterations: c(20, x.alt), card_builds: c(40, x.card) },
+          members: this.orgMembers.filter((q) => q.org_id === org.id).map((q) => ({ userId: q.user_id, role: q.role, email: this.users.get(q.user_id)?.email ?? null, you: q.user_id === u.id })),
+          sessions: this.projects.filter((p) => p.org_id === org.id).map((p) => ({ id: p.id, clientLabel: p.client_label, status: p.status, createdAt: p.created_at, cardId: this.cards.find((cc) => cc.project_id === p.id)?.id ?? null })),
+        });
+      }
+      case "update_org": { Object.assign(this.orgs.find((o) => o.id === b.orgId)!, { booking_url: b.bookingUrl }); return this.ok(route, { ok: true }); }
+      case "create_invite": return this.ok(route, { link: `http://localhost:5174/business/join/INVITE${this.seq++}`, expiresInDays: 7 });
       default: return this.err(route, 400, "invalid_input", "bad");
     }
   }

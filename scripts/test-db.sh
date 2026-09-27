@@ -16,4 +16,4 @@ PSQL=(psql -h "$TMP" -p "$PORT" -U postgres -v ON_ERROR_STOP=1 -q)
 "${PSQL[@]}" -c "create database app"
 "${PSQL[@]}" -d app -f "$ROOT/tests/db/00_supabase_stubs.sql"
 for f in "$ROOT"/supabase/migrations/*.sql; do echo "applying $(basename "$f")"; "${PSQL[@]}" -d app -f "$f"; done
-"${PSQL[@]}" -d app -f "$ROOT/tests/db/10_credits_test.sql"
+for t in "$ROOT"/tests/db/[1-9]*_test.sql; do echo "running $(basename "$t")"; "${PSQL[@]}" -d app -f "$t"; done

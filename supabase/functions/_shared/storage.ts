@@ -1,6 +1,6 @@
 import { admin } from "./db.ts";
 
-export type Bucket = "uploads" | "generations" | "cards";
+export type Bucket = "uploads" | "generations" | "cards" | "brand";
 
 export async function download(bucket: Bucket, path: string): Promise<Uint8Array | null> {
   const { data, error } = await admin().storage.from(bucket).download(path);

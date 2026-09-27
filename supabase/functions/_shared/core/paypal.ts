@@ -81,3 +81,34 @@ export function planOverride(amount: string, currency: string) {
     }],
   };
 }
+
+// ---------------------------------------------------------------------------
+// One-time packs (PayPal Orders v2)
+// ---------------------------------------------------------------------------
+
+export interface CapturedOrder {
+  id: string;
+  status: string;
+  purchase_units?: {
+    reference_id?: string;
+    payments?: { captures?: { id: string; status: string; custom_id?: string; amount?: { value: string; currency_code: string } }[] };
+  }[];
+}
+
+/** Validates a captured order against what we sold. Never trust the redirect alone. */
+export function verifyCapture(order: CapturedOrder, expected: { userId: string; planCode: string; amount: string; currency: string }):
+  { ok: true; captureId: string } | { ok: false; reason: string } {
+  if (order.status !== "COMPLETED") return { ok: false, reason: `order_${order.status?.toLowerCase?.() ?? "unknown"}` };
+  const cap = order.purchase_units?.[0]?.payments?.captures?.[0];
+  if (!cap || cap.status !== "COMPLETED") return { ok: false, reason: "capture_not_completed" };
+  if (cap.custom_id !== `${expected.userId}:${expected.planCode}`) return { ok: false, reason: "custom_id_mismatch" };
+  if (cap.amount?.currency_code !== expected.currency || Number(cap.amount?.value) !== Number(expected.amount)) return { ok: false, reason: "amount_mismatch" };
+  return { ok: true, captureId: cap.id };
+}
+
+/** custom_id on subscriptions: "<userId>" for people, "org:<orgId>" for salons. */
+export function parseSubscriptionOwner(customId: string | undefined): { kind: "user" | "org"; id: string } | null {
+  if (!customId) return null;
+  if (customId.startsWith("org:")) return { kind: "org", id: customId.slice(4) };
+  return { kind: "user", id: customId };
+}

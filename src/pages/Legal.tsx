@@ -22,6 +22,9 @@ export function Privacy() {
         <li><strong>Account data</strong>: your email address and whether it is verified.</li>
         <li><strong>Billing data</strong>: subscription status and payment records from PayPal. We never see or store your card details.</li>
         <li><strong>Security data</strong>: a salted, one-way hash of your IP address and of a random browser identifier, used only to prevent abuse of free styles.</li>
+        <li><strong>Survey answers</strong> (optional): after a purchase we ask five multiple-choice questions about your haircut habits, such as how often you get your hair cut. They're linked to your account.</li>
+        <li><strong>Referral data</strong>: which invite link you signed up with. The person who invited you only sees a count, never your identity or purchase.</li>
+        <li><strong>Salon consultations</strong>: if a salon uses {APP_NAME} with you, the salon decides why your photo is processed (it is the controller) and we process it on its behalf.</li>
         <li><strong>Usage events</strong> (for example “upload completed”). Anonymous product analytics identifiers are only set with your consent.</li>
       </ul>
       <h2>How we use it</h2>
@@ -30,6 +33,7 @@ export function Privacy() {
         <li>To run subscriptions and keep payment records (contract and legal obligation).</li>
         <li>To prevent abuse and keep the service secure (legitimate interests).</li>
         <li>To understand and improve the product using aggregated analytics (consent).</li>
+        <li>To learn about customers' haircut habits from optional survey answers, so we can improve recommendations and offers (legitimate interests; you can skip the survey, and ask us to delete your answers at any time). Answers are reported in aggregate or pseudonymised, never sold.</li>
       </ul>
       <h2>What we don't do</h2>
       <ul>
@@ -75,6 +79,12 @@ export function Terms() {
         <li>Don't upload unlawful, sexual, violent or otherwise inappropriate images, or images of children. We may refuse or delete such content.</li>
         <li>You keep ownership of your photos. You give us a limited licence to process them only to provide the service.</li>
       </ul>
+      <h2>Starter Pack</h2>
+      <p>The Starter Pack is a one-off purchase of extra styles, alterations and a full Hairstyle Card, plus Plus features for a limited period (shown at checkout). It does not renew. Unused credits expire at the end of that period.</p>
+      <h2>Referrals</h2>
+      <p>When three people who signed up with your invite link each buy a Starter Pack, you get one free month of Plus features and allowance, up to three times. Invites only count for new accounts that haven't purchased before, and not from the same device. Rewards have no cash value. We may withhold rewards obtained by abuse, such as fake or self-created accounts.</p>
+      <h2>Salon plans</h2>
+      <p>Salon plans are for businesses. The salon is responsible for getting its clients' agreement before photographing them and for how it uses the cards. We process client photos on the salon's behalf under our data processing terms, available on request.</p>
       <h2>Free use and Plus</h2>
       <p>Free use includes a limited number of concepts and requires a verified email. Plus is a monthly subscription billed through PayPal. Allowances reset each billing period and do not roll over. If a generation fails for technical reasons, it isn't counted. You can cancel at any time; access continues until the end of the paid period. Statutory rights, including any right to cancel under consumer law, are not affected — by starting generations immediately you agree the digital service begins straight away.</p>
       <h2>Acceptable use</h2>

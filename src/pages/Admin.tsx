@@ -5,6 +5,8 @@ import { callFn, errorMessage } from "../lib/api";
 import { Alert, PageTitle, Spinner } from "../components/ui";
 import { ANALYTICS_EVENTS } from "../../supabase/functions/_shared/core/constants.ts";
 
+type Growth = { packs_sold: number; referral_signups: number; referrals_qualified: number; referral_rewards: number; organizations: number; organizations_active: number; business_sessions_30d: number };
+interface SurveySummary { completions: number; eligible: number; questions: { key: string; prompt: string; active: boolean; answers: Record<string, number> }[] }
 type Stats = Record<string, unknown> & { funnel_30d: Record<string, number>; revenue: Record<string, number>; revenue_30d: Record<string, number>; subscriptions: Record<string, number> };
 interface SettingRow { key: string; value: Record<string, unknown>; updated_at: string }
 interface PlanRow { code: string; name: string; kind: string; active: boolean; generations: number; alterations: number; card_builds: number; prices: Record<string, { amount: string; paypal_plan_id: string | null }> }
@@ -96,6 +98,8 @@ function PlanEditor({ plan, onSaved }: { plan: PlanRow; onSaved: () => void }) {
 export default function Admin() {
   const { ready, profile } = useAuth();
   const [stats, setStats] = useState<Stats | null>(null);
+  const [growth, setGrowth] = useState<Growth | null>(null);
+  const [survey, setSurvey] = useState<SurveySummary | null>(null);
   const [failures, setFailures] = useState<{ error_code: string; generation_type: string; model: string; created_at: string }[]>([]);
   const [settings, setSettings] = useState<SettingRow[]>([]);
   const [plans, setPlans] = useState<PlanRow[]>([]);
@@ -103,11 +107,12 @@ export default function Admin() {
 
   const load = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([
-        callFn<{ stats: Stats; recentFailures: typeof failures }>("admin", { action: "stats" }),
+      const [s, c, sv] = await Promise.all([
+        callFn<{ stats: Stats; growth: Growth; recentFailures: typeof failures }>("admin", { action: "stats" }),
         callFn<{ settings: SettingRow[]; plans: PlanRow[] }>("admin", { action: "get_settings" }),
+        callFn<SurveySummary>("admin", { action: "survey" }),
       ]);
-      setStats(s.stats); setFailures(s.recentFailures); setSettings(c.settings); setPlans(c.plans);
+      setStats(s.stats); setGrowth(s.growth); setSurvey(sv); setFailures(s.recentFailures); setSettings(c.settings); setPlans(c.plans);
     } catch (e) { setError(errorMessage(e)); }
   }, []);
   useEffect(() => { if (profile?.is_admin) void load(); }, [profile?.is_admin, load]);
@@ -135,6 +140,60 @@ export default function Admin() {
             <Tile label="Storage" value={bytes(Number(stats.storage_bytes))} sub={`${n(stats.storage_objects)} objects`} />
             <Tile label="Subscriptions" value={n(stats.subscriptions?.active ?? 0)} sub={Object.entries(stats.subscriptions ?? {}).map(([k, v]) => `${k}: ${v}`).join(" · ")} />
           </div>
+
+          {growth && (
+            <>
+              <h2 className="mt-10 text-[30px]">Growth</h2>
+              <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+                <Tile label="Starter Packs sold" value={n(growth.packs_sold)} />
+                <Tile label="Referral sign-ups" value={n(growth.referral_signups)} sub={`${n(growth.referrals_qualified)} bought a pack`} />
+                <Tile label="Free months awarded" value={n(growth.referral_rewards)} />
+                <Tile label="Salons" value={n(growth.organizations_active)} sub={`${n(growth.organizations)} created · ${n(growth.business_sessions_30d)} sessions in 30 days`} />
+              </div>
+            </>
+          )}
+
+          {survey && (
+            <>
+              <div className="mt-10 flex flex-wrap items-end justify-between gap-3">
+                <h2 className="text-[30px]">Customer survey</h2>
+                <button className="btn-secondary min-h-10 px-4" onClick={async () => {
+                  const r = await callFn<{ csv: string }>("admin", { action: "survey_csv" });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(new Blob([r.csv], { type: "text/csv" }));
+                  a.download = "survey-responses.csv";
+                  a.click();
+                }}>Download CSV (pseudonymised)</button>
+              </div>
+              <p className="mt-1 text-[14px] text-ink-2">{n(survey.completions)} completed of {n(survey.eligible)} paying customers ({survey.eligible ? Math.round((survey.completions / survey.eligible) * 100) : 0}%). Up to 5 questions can be active.</p>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {survey.questions.map((q) => {
+                  const total = Object.values(q.answers).reduce((a, b) => a + b, 0);
+                  return (
+                    <div key={q.key} className="border border-line bg-card p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-medium">{q.prompt}</p>
+                        <label className="flex shrink-0 items-center gap-2 text-[13px] text-muted">
+                          <input type="checkbox" className="h-4 w-4 accent-ink" checked={q.active} onChange={async (e) => {
+                            try { await callFn("admin", { action: "update_survey_question", key: q.key, active: e.target.checked }); await load(); } catch (err) { setError(errorMessage(err)); }
+                          }} />Active
+                        </label>
+                      </div>
+                      {total === 0 ? <p className="mt-2 text-[13px] text-muted">No answers yet.</p> : (
+                        <table className="mt-2 w-full text-[14px]">
+                          <tbody>
+                            {Object.entries(q.answers).sort((a, b) => b[1] - a[1]).map(([ans, c]) => (
+                              <tr key={ans} className="border-t border-line/60"><td className="py-1">{ans.replace(/_/g, " ")}</td><td className="py-1 text-right tabular-nums">{c}</td><td className="w-14 py-1 text-right tabular-nums text-muted">{Math.round((c / total) * 100)}%</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
 
           <h2 className="mt-10 text-[30px]">Funnel (last 30 days)</h2>
           <table className="mt-3 w-full max-w-xl text-left text-[14px]">

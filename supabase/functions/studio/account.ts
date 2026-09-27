@@ -11,6 +11,15 @@ export async function allowance(req: Request, user: AuthedUser) {
 export async function deleteAccount(req: Request, user: AuthedUser, body: Record<string, unknown>) {
   if (body.confirm !== "DELETE") return json(req, { error: { code: "invalid_input", message: "Type DELETE to confirm." } }, 400);
   const db = admin();
+  // A salon's only owner must cancel the salon plan (or add another owner) first, so the salon isn't left billing with no admin.
+  const { data: owned } = await db.from("organization_members").select("org_id, organizations(subscription_status)").eq("user_id", user.id).eq("role", "owner");
+  for (const m of owned ?? []) {
+    const { count } = await db.from("organization_members").select("user_id", { count: "exact", head: true }).eq("org_id", m.org_id).eq("role", "owner");
+    const status = (m.organizations as unknown as { subscription_status: string })?.subscription_status;
+    if ((count ?? 0) <= 1 && ["active", "pending", "past_due"].includes(status)) {
+      return json(req, { error: { code: "invalid_input", message: "You're the only owner of a salon with an active plan. Cancel the salon plan or add another owner first." } }, 409);
+    }
+  }
   const { data: profile } = await db.from("users").select("paypal_subscription_id,subscription_status").eq("id", user.id).single();
   if (profile?.paypal_subscription_id && ["active", "pending", "past_due", "suspended"].includes(profile.subscription_status)) {
     await paypal(`/v1/billing/subscriptions/${profile.paypal_subscription_id}/cancel`, {

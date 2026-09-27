@@ -15,6 +15,11 @@ const Account = lazy(() => import("./pages/Account"));
 const SignIn = lazy(() => import("./pages/SignIn"));
 const Admin = lazy(() => import("./pages/Admin"));
 const NotFound = lazy(() => import("./pages/NotFound"));
+const PackReturn = lazy(() => import("./pages/PackReturn"));
+const Survey = lazy(() => import("./pages/Survey"));
+const Business = lazy(() => import("./pages/Business"));
+const BusinessDashboard = lazy(() => import("./pages/BusinessDashboard"));
+const BusinessJoin = lazy(() => import("./pages/BusinessJoin"));
 const Privacy = lazy(() => import("./pages/Legal").then((m) => ({ default: m.Privacy })));
 const Terms = lazy(() => import("./pages/Legal").then((m) => ({ default: m.Terms })));
 const Cookies = lazy(() => import("./pages/Legal").then((m) => ({ default: m.Cookies })));
@@ -33,6 +38,11 @@ export default function App() {
               <Route path="/style/:token" element={<PublicCard />} />
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/billing/return" element={<BillingReturn />} />
+              <Route path="/billing/pack-return" element={<PackReturn />} />
+              <Route path="/survey" element={<Survey />} />
+              <Route path="/business" element={<Business />} />
+              <Route path="/business/dashboard" element={<BusinessDashboard />} />
+              <Route path="/business/join/:code" element={<BusinessJoin />} />
               <Route path="/account" element={<Account />} />
               <Route path="/signin" element={<SignIn />} />
               <Route path="/admin" element={<Admin />} />

@@ -4,6 +4,7 @@ import { analyse, createProject, projectUrls, saveProject, deleteProject } from 
 import { alter, generate, generateAnother } from "./generate.ts";
 import { emailCard, getCard, revokeCard, selectStyle, shareCard } from "./cards.ts";
 import { allowance, claim, deleteAccount } from "./account.ts";
+import { attachReferral, getReferral, getSurvey, submitSurvey } from "./growth.ts";
 
 type Handler = (req: Request, user: Awaited<ReturnType<typeof requireUser>>, body: Record<string, unknown>) => Promise<Response>;
 
@@ -24,6 +25,10 @@ const actions: Record<string, Handler> = {
   delete_account: deleteAccount,
   allowance,
   claim,
+  get_survey: getSurvey,
+  submit_survey: submitSurvey,
+  get_referral: getReferral,
+  attach_referral: attachReferral,
 };
 
 serve(async (req) => {

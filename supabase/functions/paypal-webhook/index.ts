@@ -4,6 +4,7 @@ import { admin } from "../_shared/db.ts";
 import { verifyWebhook } from "../_shared/paypal.ts";
 import { syncSubscription } from "../_shared/subscriptions.ts";
 import { track } from "../_shared/analytics.ts";
+import { fulfilPack } from "../_shared/fulfilment.ts";
 import { HANDLED_WEBHOOK_EVENTS, subscriptionIdFromEvent } from "../_shared/core/paypal.ts";
 import { isUuid } from "../_shared/http.ts";
 
@@ -44,12 +45,13 @@ async function handle(event: { id: string; event_type: string; resource: Record<
 
   if (event.event_type.startsWith("PAYMENT.SALE.") && subId) {
     const { data: user } = await db.from("users").select("id").eq("paypal_subscription_id", subId).maybeSingle();
+    const { data: org } = user ? { data: null } : await db.from("organizations").select("id").eq("paypal_subscription_id", subId).maybeSingle();
     const amount = (r.amount ?? {}) as { total?: string; currency?: string };
     const status = event.event_type === "PAYMENT.SALE.COMPLETED" ? "completed" : event.event_type === "PAYMENT.SALE.REFUNDED" ? "refunded" : "reversed";
     const txId = event.event_type === "PAYMENT.SALE.COMPLETED" ? String(r.id) : `${r.id}:${status}`;
     await db.from("payments").upsert({
-      user_id: user?.id ?? (isUuid(r.custom) ? r.custom : null), paypal_event_id: event.id, transaction_id: txId,
-      subscription_id: subId, plan_code: "plus_monthly", kind: "subscription",
+      user_id: user?.id ?? (isUuid(r.custom) ? r.custom : null), org_id: org?.id ?? null, paypal_event_id: event.id, transaction_id: txId,
+      subscription_id: subId, plan_code: null, kind: "subscription",
       amount: amount.total ? Number(amount.total) * (status === "completed" ? 1 : -1) : null, currency: amount.currency ?? null, status,
     }, { onConflict: "transaction_id", ignoreDuplicates: true });
   }
@@ -63,29 +65,26 @@ async function handle(event: { id: string; event_type: string; resource: Record<
 
   if (subId) {
     const result = await syncSubscription(subId);
-    if (result) await db.from("payments").update({ user_id: result.userId }).eq("subscription_id", subId).is("user_id", null);
-    if (result && event.event_type === "PAYMENT.SALE.COMPLETED" && result.status === "active") {
+    if (result?.userId) await db.from("payments").update({ user_id: result.userId }).eq("subscription_id", subId).is("user_id", null);
+    if (result?.owner.kind === "org") await db.from("payments").update({ org_id: result.owner.id }).eq("subscription_id", subId).is("org_id", null);
+    if (result?.userId && event.event_type === "PAYMENT.SALE.COMPLETED" && result.status === "active") {
       const { count } = await db.from("payments").select("id", { count: "exact", head: true }).eq("subscription_id", subId).eq("status", "completed");
       if (count === 1) await track("subscription_completed", result.userId, null, { via: "webhook" });
     }
     return;
   }
 
-  // Future one-time Style Pack (PayPal Orders): custom_id = "<user_uuid>:<plan_code>".
+  // One-time packs (PayPal Orders): custom_id = "<user_uuid>:<plan_code>". Idempotent with the return-page capture.
   if (event.event_type === "PAYMENT.CAPTURE.COMPLETED") {
     const [userId, planCode] = String(r.custom_id ?? "").split(":");
     if (!isUuid(userId) || !planCode) return;
-    const { data: plan } = await db.from("plans").select("*").eq("code", planCode).eq("kind", "one_time").maybeSingle();
-    if (!plan) return;
     const amount = (r.amount ?? {}) as { value?: string; currency_code?: string };
-    const { data: payment, error } = await db.from("payments").insert({
-      user_id: userId, paypal_event_id: event.id, transaction_id: String(r.id), plan_code: planCode, kind: "one_time",
-      amount: amount.value ? Number(amount.value) : null, currency: amount.currency_code ?? null, status: "completed",
-    }).select("id").single();
-    if (error) return; // duplicate capture
-    await db.from("credit_grants").insert({
-      user_id: userId, plan_code: planCode, payment_id: payment.id, generations: plan.generations, alterations: plan.alterations,
-      card_builds: plan.card_builds, expires_at: plan.grant_days ? new Date(Date.now() + plan.grant_days * 86_400_000).toISOString() : null,
-    });
+    const { data: plan } = await db.from("plans").select("prices").eq("code", planCode).eq("kind", "one_time").maybeSingle();
+    const expected = (plan?.prices as Record<string, { amount: string }> | undefined)?.[amount.currency_code ?? ""]?.amount;
+    if (!plan || !expected || Number(expected) !== Number(amount.value)) {
+      console.error("capture webhook amount mismatch", planCode);
+      return;
+    }
+    await fulfilPack({ userId, planCode, captureId: String(r.id), amount: String(amount.value), currency: String(amount.currency_code), eventId: event.id });
   }
 }

@@ -52,6 +52,8 @@ export async function getAllowance(userId: string): Promise<Allowance> {
 
 export interface Allowance {
   paid: boolean;
+  subscribed: boolean;
+  access_until: string | null;
   subscription_status: string;
   plan: string | null;
   period_start: string | null;

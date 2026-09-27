@@ -57,7 +57,13 @@ export const HairstyleCard = forwardRef<HTMLDivElement, { card: CardPayload; qrU
       <article ref={ref} className="print-card mx-auto max-w-4xl border border-line bg-card p-4 shadow-[0_1px_0_rgba(0,0,0,.03)] sm:p-8" aria-label={`Hairstyle Card: ${d.style_name}`}>
         <header className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="eyebrow">{APP_NAME} · Hairstyle Card</p>
+            {d.brand && (
+              <div className="mb-3 flex items-center gap-3">
+                {card.brandLogo && <img src={card.brandLogo} alt={`${d.brand.name} logo`} className="h-10 w-auto max-w-[140px] object-contain" crossOrigin="anonymous" />}
+                <p className="text-[13px] text-ink-2">Prepared by <strong className="text-ink">{d.brand.name}</strong></p>
+              </div>
+            )}
+            <p className="eyebrow">{d.brand ? "Hairstyle Card" : `${APP_NAME} · Hairstyle Card`}</p>
             <h2 className="mt-1 text-[38px] leading-[1.02] sm:text-[52px]">{d.style_name}</h2>
             <p className="mt-2 max-w-xl text-[15px] text-ink-2">{d.description}</p>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -125,7 +131,12 @@ export const HairstyleCard = forwardRef<HTMLDivElement, { card: CardPayload; qrU
         </div>
 
         <footer className="mt-8 flex flex-col gap-4 border-t border-line pt-4 sm:flex-row sm:items-end sm:justify-between">
-          <p className="max-w-xl text-[12px] leading-relaxed text-muted">{d.disclaimer}</p>
+          <div className="max-w-xl space-y-3">
+            {d.brand?.booking_url && (
+              <a href={d.brand.booking_url} target="_blank" rel="noopener noreferrer" className="no-print btn-primary min-h-10 px-4">Book with {d.brand.name}</a>
+            )}
+            <p className="text-[12px] leading-relaxed text-muted">{d.disclaimer}</p>
+          </div>
           {qrUrl && publicUrl && (
             <div className="flex items-center gap-3">
               <img src={qrUrl} alt="QR code that opens this Hairstyle Card" width={96} height={96} className="h-24 w-24" crossOrigin="anonymous" />

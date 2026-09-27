@@ -69,10 +69,10 @@ test("anonymous visitor → free looks → pay → alter → full card → QR �
 
   // Free user: alter → paywall; generate another → paywall (no credits)
   await page.getByRole("button", { name: "Alter this" }).first().click();
-  await expect(page.getByRole("dialog", { name: "Upgrade to Plus" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Unlock more styles" })).toBeVisible();
   await page.getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: "Generate another like this" }).first().click();
-  await expect(page.getByRole("dialog", { name: "Upgrade to Plus" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Unlock more styles" })).toBeVisible();
   await page.getByRole("button", { name: "Close" }).click();
 
   // Choose → preview card (watermarked, paywalled)
@@ -87,7 +87,7 @@ test("anonymous visitor → free looks → pay → alter → full card → QR �
   await shot(page, "04-card-preview");
 
   // Pay (PayPal approval simulated by redirect to /billing/return)
-  await page.getByRole("link", { name: /Get Plus/ }).first().click();
+  await page.getByRole("link", { name: /or Plus/ }).first().click();
   await expect(page).toHaveURL(/\/pricing/);
   await page.getByRole("button", { name: "Get Plus" }).click();
   await expect(page.getByRole("heading", { name: "Welcome to Plus." })).toBeVisible();
@@ -123,17 +123,17 @@ test("anonymous visitor → free looks → pay → alter → full card → QR �
 
   // Paid: seven generations + alteration on the project
   await page.getByRole("link", { name: "← Back to your looks" }).click();
-  await expect(page.getByText("7 new styles and 2 alterations left this period.")).toBeVisible();
+  await expect(page.getByText("7 new styles and 2 alterations left.")).toBeVisible();
   await page.getByRole("button", { name: "Alter this" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Change something" });
   await dialog.getByRole("button", { name: "Keep enough length for a bun" }).click();
   await dialog.getByLabel(/Anything else/).fill("a little shorter at the back");
   await dialog.getByRole("button", { name: "Apply changes" }).click();
   await expect(page.getByText("Change: Keep enough length for a bun. a little shorter at the back")).toBeVisible();
-  await expect(page.getByText("7 new styles and 1 alterations left this period.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("7 new styles and 1 alterations left.")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Generate another like this" }).first().click();
   await expect(page.getByRole("heading", { name: /Textured Crop/ })).toBeVisible();
-  await expect(page.getByText("6 new styles and 1 alterations left this period.")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("6 new styles and 1 alterations left.")).toBeVisible({ timeout: 30_000 });
   await shot(page, "08-results-paid");
 
   // Revoke sharing → public link stops working

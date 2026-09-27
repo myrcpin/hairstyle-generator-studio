@@ -19,6 +19,8 @@ export interface CardData extends CardContent {
   views: { view: CardView; generation_id: string | null; status: "pending" | "ready" | "unavailable" }[];
   generated_at: string;
   prompt_version: string;
+  /** Present on salon consultations: shown as "Prepared by <salon>" with a booking link. */
+  brand?: { org_id: string; name: string; booking_url: string | null } | null;
 }
 
 export const CARD_CONTENT_JSON_SCHEMA = {
